@@ -16,6 +16,7 @@ import time
 
 from .config import load_config_file
 from .reset import (
+    RP2040Reset,
     ClassicReset,
     CustomReset,
     DEFAULT_RESET_DELAY,
@@ -81,7 +82,7 @@ CHIP_ERASE_TIMEOUT = cfg.getfloat("chip_erase_timeout", 120)
 # Longest any command can run
 MAX_TIMEOUT = cfg.getfloat("max_timeout", CHIP_ERASE_TIMEOUT * 2)
 # Timeout for syncing with bootloader
-SYNC_TIMEOUT = cfg.getfloat("sync_timeout", 0.1)
+SYNC_TIMEOUT = cfg.getfloat("sync_timeout", 0.25)
 # Timeout (per megabyte) for calculating md5sum
 MD5_TIMEOUT_PER_MB = cfg.getfloat("md5_timeout_per_mb", 8)
 # Timeout (per megabyte) for erasing a region
@@ -609,6 +610,7 @@ class ESPLoader(object):
         # USB-to-Serial bridge
         if os.name != "nt" and not self._port.name.startswith("rfc2217:"):
             return (
+                RP2040Reset(self._port, delay),
                 UnixTightReset(self._port, delay),
                 UnixTightReset(self._port, extra_delay),
                 ClassicReset(self._port, delay),

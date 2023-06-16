@@ -57,6 +57,19 @@ class ResetStrategy(object):
             status &= ~TIOCM_RTS
         fcntl.ioctl(self.port.fileno(), TIOCMSET, struct.pack("I", status))
 
+class RP2040Reset(ResetStrategy):
+    """
+    Reset sequence for boards based on RP2040 as a serial 2 USB transciever
+    """
+    def __call__(self):
+        print("RP2040 reset")
+        self._setRTS(True)   # RTS=HIGH, chip out of reset
+        self._setDTR(False)   # DTR=LOW
+        self._setRTS(False)   # RTS=LOW, chip in reset
+        time.sleep(0.5)
+        self._setRTS(True)   # RTS=HIGH, chip out of reset
+        time.sleep(0.2)
+        self._setDTR(True)   # DTR=HIGH, done
 
 class ClassicReset(ResetStrategy):
     """
