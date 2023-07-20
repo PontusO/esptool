@@ -24,6 +24,7 @@ import tempfile
 import time
 from socket import AF_INET, SOCK_STREAM, socket
 from time import sleep
+from unittest.mock import MagicMock
 
 # Link command line options --port, --chip, --baud, --with-trace, and --preload-port
 from conftest import (
@@ -616,14 +617,16 @@ class TestSecurityInfo(EsptoolTestCase):
     def test_show_security_info(self):
         res = self.run_esptool("get_security_info")
         assert "Flags" in res
-        assert "Flash_Crypt_Cnt" in res
-        assert "Key_Purposes" in res
+        assert "Crypt Count" in res
+        assert "Key Purposes" in res
         if arg_chip != "esp32s2":
             esp = esptool.get_default_connected_device(
                 [arg_port], arg_port, 10, 115200, arg_chip
             )
-            assert f"Chip_ID: {esp.IMAGE_CHIP_ID}" in res
-            assert "Api_Version" in res
+            assert f"Chip ID: {esp.IMAGE_CHIP_ID}" in res
+            assert "API Version" in res
+        assert "Secure Boot" in res
+        assert "Flash Encryption" in res
 
 
 class TestFlashSizes(EsptoolTestCase):
@@ -1133,6 +1136,23 @@ class TestReadWriteMemory(EsptoolTestCase):
             )
             chip = esp.get_chip_description()
             assert "unknown" not in chip.lower()
+        finally:
+            esp._port.close()
+
+    def test_read_get_chip_features(self):
+        try:
+            esp = esptool.get_default_connected_device(
+                [arg_port], arg_port, 10, 115200, arg_chip
+            )
+
+            if hasattr(esp, "get_flash_cap") and esp.get_flash_cap() == 0:
+                esp.get_flash_cap = MagicMock(return_value=1)
+            if hasattr(esp, "get_psram_cap") and esp.get_psram_cap() == 0:
+                esp.get_psram_cap = MagicMock(return_value=1)
+
+            features = ", ".join(esp.get_chip_features())
+            assert "Unknown Embedded Flash" not in features
+            assert "Unknown Embedded PSRAM" not in features
         finally:
             esp._port.close()
 
