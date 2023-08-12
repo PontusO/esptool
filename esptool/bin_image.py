@@ -20,6 +20,7 @@ from .targets import (
     ESP32H2BETA1ROM,
     ESP32H2BETA2ROM,
     ESP32H2ROM,
+    ESP32P4ROM,
     ESP32ROM,
     ESP32S2ROM,
     ESP32S3BETA2ROM,
@@ -61,6 +62,7 @@ def LoadFirmwareImage(chip, image_file):
                 "esp32c2": ESP32C2FirmwareImage,
                 "esp32c6": ESP32C6FirmwareImage,
                 "esp32h2": ESP32H2FirmwareImage,
+                "esp32p4": ESP32P4FirmwareImage,
             }[chip](f)
         else:  # Otherwise, ESP8266 so look at magic to determine the image type
             magic = ord(f.read(1))
@@ -247,6 +249,20 @@ class BaseFirmwareImage(object):
         f.write(segment_data)
         if checksum is not None:
             return ESPLoader.checksum(segment_data, checksum)
+
+    def save_flash_segment(self, f, segment, checksum=None):
+        """
+        Save the next segment to the image file, return next checksum value if provided
+        """
+        if self.ROM_LOADER.CHIP_NAME == "ESP32":
+            # Work around a bug in ESP-IDF 2nd stage bootloader, that it didn't map the
+            # last MMU page, if an IROM/DROM segment was < 0x24 bytes
+            # over the page boundary.
+            segment_end_pos = f.tell() + len(segment.data) + self.SEG_HEADER_LEN
+            segment_len_remainder = segment_end_pos % self.IROM_ALIGN
+            if segment_len_remainder < 0x24:
+                segment.data += b"\x00" * (0x24 - segment_len_remainder)
+        return self.save_segment(f, segment, checksum)
 
     def read_checksum(self, f):
         """Return ESPLoader checksum from end of just-read image"""
@@ -771,19 +787,6 @@ class ESP32FirmwareImage(BaseFirmwareImage):
             with open(filename, "wb") as real_file:
                 real_file.write(f.getvalue())
 
-    def save_flash_segment(self, f, segment, checksum=None):
-        """
-        Save the next segment to the image file, return next checksum value if provided
-        """
-        segment_end_pos = f.tell() + len(segment.data) + self.SEG_HEADER_LEN
-        segment_len_remainder = segment_end_pos % self.IROM_ALIGN
-        if segment_len_remainder < 0x24:
-            # Work around a bug in ESP-IDF 2nd stage bootloader, that it didn't map the
-            # last MMU page, if an IROM/DROM segment was < 0x24 bytes
-            # over the page boundary.
-            segment.data += b"\x00" * (0x24 - segment_len_remainder)
-        return self.save_segment(f, segment, checksum)
-
     def load_extended_header(self, load_file):
         def split_byte(n):
             return (n & 0x0F, (n >> 4) & 0x0F)
@@ -1053,6 +1056,15 @@ class ESP32C6FirmwareImage(ESP32FirmwareImage):
 
 
 ESP32C6ROM.BOOTLOADER_IMAGE = ESP32C6FirmwareImage
+
+
+class ESP32P4FirmwareImage(ESP32FirmwareImage):
+    """ESP32P4 Firmware Image almost exactly the same as ESP32FirmwareImage"""
+
+    ROM_LOADER = ESP32P4ROM
+
+
+ESP32P4ROM.BOOTLOADER_IMAGE = ESP32P4FirmwareImage
 
 
 class ESP32H2FirmwareImage(ESP32C6FirmwareImage):
