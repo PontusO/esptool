@@ -587,18 +587,36 @@ def main(argv=None, esp=None):
         "--output", "-o", help="Output filename", type=str, required=True
     )
     parser_merge_bin.add_argument(
-        "--format", "-f", help="Format of the output file", choices="raw", default="raw"
-    )  # for future expansion
+        "--format",
+        "-f",
+        help="Format of the output file",
+        choices=["raw", "uf2"],
+        default="raw",
+    )
+    uf2_group = parser_merge_bin.add_argument_group("UF2 format")
+    uf2_group.add_argument(
+        "--chunk-size",
+        help="Specify the used data part of the 512 byte UF2 block. "
+        "A common value is 256. By default the largest possible value will be used.",
+        default=None,
+        type=arg_auto_chunk_size,
+    )
+    uf2_group.add_argument(
+        "--md5-disable",
+        help="Disable MD5 checksum in UF2 output",
+        action="store_true",
+    )
     add_spi_flash_subparsers(parser_merge_bin, allow_keep=True, auto_detect=False)
 
-    parser_merge_bin.add_argument(
+    raw_group = parser_merge_bin.add_argument_group("RAW format")
+    raw_group.add_argument(
         "--target-offset",
         "-t",
         help="Target offset where the output file will be flashed",
         type=arg_auto_int,
         default=0,
     )
-    parser_merge_bin.add_argument(
+    raw_group.add_argument(
         "--fill-flash-size",
         help="If set, the final binary file will be padded with FF "
         "bytes up to this flash size.",
@@ -834,7 +852,11 @@ def main(argv=None, esp=None):
             if flash_size is not None:  # Secure download mode
                 esp.flash_set_parameters(flash_size_bytes(flash_size))
                 # Check if stub supports chosen flash size
-                if esp.IS_STUB and flash_size in ("32MB", "64MB", "128MB"):
+                if (
+                    esp.IS_STUB
+                    and esp.CHIP_NAME != "ESP32-S3"
+                    and flash_size_bytes(flash_size) > 16 * 1024 * 1024
+                ):
                     print(
                         "WARNING: Flasher stub doesn't fully support flash size larger "
                         "than 16MB, in case of failure use --no-stub."
@@ -858,7 +880,7 @@ def main(argv=None, esp=None):
             args.size = flash_size_bytes(size_str)
 
         if esp.IS_STUB and hasattr(args, "address") and hasattr(args, "size"):
-            if args.address + args.size > 0x1000000:
+            if esp.CHIP_NAME != "ESP32-S3" and args.address + args.size > 0x1000000:
                 print(
                     "WARNING: Flasher stub doesn't fully support flash size larger "
                     "than 16MB, in case of failure use --no-stub."
@@ -904,6 +926,13 @@ def arg_auto_int(x):
 def arg_auto_size(x):
     x = x.lower()
     return x if x == "all" else arg_auto_int(x)
+
+
+def arg_auto_chunk_size(string: str) -> int:
+    num = int(string, 0)
+    if num & 3 != 0:
+        raise argparse.ArgumentTypeError("Chunk size should be a 4-byte aligned number")
+    return num
 
 
 def get_port_list():

@@ -1,10 +1,13 @@
 # Gitlab CI config
 #
 # Note: When updating, please also update test_esptool.yml GH Actions workflow file
-include:
-  - project: 'espressif/shared-ci-dangerjs'
-    ref: master
-    file: 'danger.yaml'
+stages:
+  - pre-check
+  - test
+  - report
+  - build_docs
+  - deploy_docs
+  - deploy_development_package
 
 workflow:
   rules:
@@ -13,13 +16,12 @@ workflow:
       when: never
     - if: '$CI_COMMIT_BRANCH'
 
-stages:
-  - danger
-  - test
-  - report
-  - build_docs
-  - deploy_docs
-  - deploy_development_package
+include:
+    - project: espressif/shared-ci-dangerjs
+      ref: master
+      file: danger.yaml
+run-danger-mr-linter:
+    stage: pre-check
 
 # cache the pip download directory in all jobs
 variables:
@@ -41,8 +43,8 @@ cache:
 
 version_check:
   <<: *test_template
-  only:
-    - tags
+  rules:
+    - if: '$CI_COMMIT_TAG != null'
   script:
     - VERSION=$(esptool.py version | head -n 1)
     - |
@@ -62,6 +64,15 @@ version_check:
     expire_in: 1 week
     reports:
       junit: test/report.xml
+
+check_uf2_ids:
+  <<: *host_tests_template
+  allow_failure: true
+  variables:
+    COVERAGE_PROCESS_START: "${CI_PROJECT_DIR}/test/.covconf"
+    PYTEST_ADDOPTS: "-sv --junitxml=test/report.xml --color=yes"
+  script:
+    - coverage run -m pytest ${CI_PROJECT_DIR}/test/test_uf2_ids.py
 
 host_tests:
   <<: *host_tests_template
@@ -289,10 +300,19 @@ target_esp32s3:
   script:
     - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32S3 --chip esp32s3 --baud 115200
 
-target_esp32s3_32MB:
+target_esp32s3_32MB_octal:
   extends: .target_esptool_test
   tags:
-    - esptool_esp32s3_32MB_target
+    - esptool_esp32s3_32MB_octal_target
+  variables:
+    ESPTOOL_TEST_FLASH_SIZE: "32"
+  script:
+    - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32S3_32MB --chip esp32s3 --baud 115200
+
+target_esp32s3_32MB_quad:
+  extends: .target_esptool_test
+  tags:
+    - esptool_esp32s3_32MB_quad_target
   variables:
     ESPTOOL_TEST_FLASH_SIZE: "32"
   script:
@@ -427,8 +447,8 @@ build_docs:
   image: python:3.7-bullseye
   tags:
     - build_docs
-  only:
-    changes:
+  rules:
+    - changes:
       - "docs/**/*"
       - "CONTRIBUTING.rst"
   needs: []
@@ -450,10 +470,6 @@ build_docs:
     - deploy
   needs:
     - build_docs
-  only:
-    changes:
-      - "docs/**/*"
-      - "CONTRIBUTING.rst"
   script:
     - source ${CI_PROJECT_DIR}/docs/utils.sh
     - add_doc_server_ssh_keys $DOCS_DEPLOY_PRIVATEKEY $DOCS_DEPLOY_SERVER $DOCS_DEPLOY_SERVER_USER
@@ -464,9 +480,12 @@ build_docs:
 deploy_docs_preview:
   extends:
     - .deploy_docs_template
-  except:
-    refs:
-      - master
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "master"'
+      when: never
+    - changes:
+      - "docs/**/*"
+      - "CONTRIBUTING.rst"
   variables:
     TYPE: "preview"
     DOCS_BUILD_DIR: "${CI_PROJECT_DIR}/docs/_build/"
@@ -479,9 +498,8 @@ deploy_docs_preview:
 deploy_docs_production:
   extends:
     - .deploy_docs_template
-  only:
-    refs:
-      - master
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "master"'
   variables:
     TYPE: "production"
     DOCS_BUILD_DIR: "${CI_PROJECT_DIR}/docs/_build/"
@@ -490,25 +508,3 @@ deploy_docs_production:
     DOCS_DEPLOY_SERVER_USER: "$DOCS_PROD_SERVER_USER"
     DOCS_DEPLOY_PATH: "$DOCS_PROD_PATH"
     DOCS_DEPLOY_URL_BASE: "https://docs.espressif.com/projects/esptool"
-
-deploy_dev_package:
-  <<: *test_template
-  rules:
-    - if: $CI_DEV_PUBLISH != null && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  variables:
-    TWINE_NON_INTERACTIVE: "true"
-    TWINE_USERNAME: __token__
-    TWINE_PASSWORD: ${PYPI_ESPTOOL_TOKEN}
-  stage: deploy_development_package
-  dependencies: []
-  script:
-    - python -m pip install --upgrade pip
-    - python -m pip install twine setuptools
-    - python ci/patch_dev_release.py --dev-no ${CI_DEV_PUBLISH} esptool/__init__.py
-    # check what has been changed with git
-    - git diff
-    - python setup.py sdist
-    # skip release if it has already been released (with failure)
-    - python -m pip download esptool==$(python setup.py -V) && exit 1
-    - tar -ztvf dist/*
-    - python -m twine upload dist/*
