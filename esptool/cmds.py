@@ -11,6 +11,8 @@ import sys
 import time
 import zlib
 
+from intelhex import IntelHex
+
 from .bin_image import ELFFile, ImageSegment, LoadFirmwareImage
 from .bin_image import (
     ESP8266ROMFirmwareImage,
@@ -980,6 +982,11 @@ def elf2image(args):
         args.chip = "esp8266"
 
     print("Creating {} image...".format(args.chip))
+    if args.ram_only_header:
+        print(
+            "RAM only visible in the header - only RAM segments are visible to the "
+            "ROM loader!"
+        )
 
     if args.chip != "esp8266":
         image = CHIP_DEFS[args.chip].BOOTLOADER_IMAGE()
@@ -990,6 +997,7 @@ def elf2image(args):
         image.min_rev = args.min_rev
         image.min_rev_full = args.min_rev_full
         image.max_rev_full = args.max_rev_full
+        image.ram_only_header = args.ram_only_header
         image.append_digest = args.append_digest
     elif args.version == "1":  # ESP8266
         image = ESP8266ROMFirmwareImage()
@@ -1331,6 +1339,19 @@ def merge_bin(args):
                 f"Wrote {of.tell():#x} bytes to file {args.output}, "
                 f"ready to flash to offset {args.target_offset:#x}"
             )
+    elif args.format == "hex":
+        out = IntelHex()
+        for addr, argfile in input_files:
+            ihex = IntelHex()
+            image = argfile.read()
+            image = _update_image_flash_params(chip_class, addr, args, image)
+            ihex.frombytes(image, addr)
+            out.merge(ihex)
+        out.write_hex_file(args.output)
+        print(
+            f"Wrote {os.path.getsize(args.output):#x} bytes to file {args.output}, "
+            f"ready to flash to offset {args.target_offset:#x}"
+        )
 
 
 def version(args):

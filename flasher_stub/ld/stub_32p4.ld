@@ -1,9 +1,9 @@
 MEMORY {
-  iram : org = 0x40804000, len = 0x100
-  dram : org = 0x40848000, len = 0x100
+  iram : org = 0x4FF10000, len = 0x4000
+  dram : org = 0x4FF50000, len = 0x18000
 }
 
-ENTRY(ram_main)
+ENTRY(stub_main)
 
 SECTIONS {
   .text : ALIGN(4) {
@@ -23,4 +23,4 @@ SECTIONS {
   } > dram
 }
 
-INCLUDE "../../../../flasher_stub/ld/rom_32h2.ld"
+INCLUDE "rom_32p4.ld"

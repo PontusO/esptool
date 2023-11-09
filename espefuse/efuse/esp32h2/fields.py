@@ -94,7 +94,7 @@ class EspEfuses(base_fields.EspEfusesBase):
                 for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
             ]
         else:
-            if self["BLK_VERSION_MAJOR"].get() == 1:
+            if self["BLK_VERSION_MINOR"].get() == 2:
                 self.efuses += [
                     EfuseField.convert(self, efuse)
                     for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
@@ -160,9 +160,13 @@ class EspEfuses(base_fields.EspEfusesBase):
     def wait_efuse_idle(self):
         deadline = time.time() + self.REGS.EFUSE_BURN_TIMEOUT
         while time.time() < deadline:
-            # if self.read_reg(self.REGS.EFUSE_CMD_REG) == 0:
-            if self.read_reg(self.REGS.EFUSE_STATUS_REG) & 0x7 == 1:
-                return
+            cmds = self.REGS.EFUSE_PGM_CMD | self.REGS.EFUSE_READ_CMD
+            if self.read_reg(self.REGS.EFUSE_CMD_REG) & cmds == 0:
+                if self.read_reg(self.REGS.EFUSE_CMD_REG) & cmds == 0:
+                    # Due to a hardware error, we have to read READ_CMD again
+                    # to make sure the efuse clock is normal.
+                    # For PGM_CMD it is not necessary.
+                    return
         raise esptool.FatalError(
             "Timed out waiting for Efuse controller command to complete"
         )

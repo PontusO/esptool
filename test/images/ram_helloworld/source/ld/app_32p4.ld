@@ -1,6 +1,6 @@
 MEMORY {
-  iram : org = 0x40804000, len = 0x100
-  dram : org = 0x40848000, len = 0x100
+  iram : org = 0x4FF60000, len = 0x100
+  dram : org = 0x4FF70000, len = 0x100
 }
 
 ENTRY(ram_main)
@@ -23,4 +23,4 @@ SECTIONS {
   } > dram
 }
 
-INCLUDE "../../../../flasher_stub/ld/rom_32h2.ld"
+INCLUDE "../../../../flasher_stub/ld/rom_32p4.ld"

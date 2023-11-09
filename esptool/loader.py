@@ -185,8 +185,6 @@ class ESPLoader(object):
     CHIP_NAME = "Espressif device"
     IS_STUB = False
 
-    FPGA_SLOW_BOOT = False
-
     DEFAULT_PORT = "/dev/ttyUSB0"
 
     USES_RFC2217 = False
@@ -303,9 +301,37 @@ class ESPLoader(object):
             try:
                 self._port = serial.serial_for_url(port)
             except serial.serialutil.SerialException as e:
+                port_issues = [
+                    [  # does not exist error
+                        re.compile(r"Errno 2|FileNotFoundError", re.IGNORECASE),
+                        "Check if the port is correct and ESP connected",
+                    ],
+                    [  # busy port error
+                        re.compile(r"Access is denied", re.IGNORECASE),
+                        "Check if the port is not used by another task",
+                    ],
+                ]
+                if sys.platform.startswith("linux"):
+                    port_issues.append(
+                        [  # permission denied error
+                            re.compile(r"Permission denied", re.IGNORECASE),
+                            (
+                                "Try to add user into dialout group: "
+                                "sudo usermod -a -G dialout $USER"
+                            ),
+                        ],
+                    )
+
+                hint_msg = ""
+                for port_issue in port_issues:
+                    if port_issue[0].search(str(e)):
+                        hint_msg = f"\nHint: {port_issue[1]}\n"
+                        break
+
                 raise FatalError(
                     f"Could not open {port}, the port is busy or doesn't exist."
                     f"\n({e})\n"
+                    f"{hint_msg}"
                 )
         else:
             self._port = port
@@ -601,7 +627,7 @@ class ESPLoader(object):
 
         # This FPGA delay is for Espressif internal use
         if (
-            self.FPGA_SLOW_BOOT
+            self.CHIP_NAME == "ESP32"
             and os.environ.get("ESPTOOL_ENV_FPGA", "").strip() == "1"
         ):
             delay = extra_delay = 7

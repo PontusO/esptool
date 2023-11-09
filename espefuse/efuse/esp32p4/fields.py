@@ -161,9 +161,13 @@ class EspEfuses(base_fields.EspEfusesBase):
     def wait_efuse_idle(self):
         deadline = time.time() + self.REGS.EFUSE_BURN_TIMEOUT
         while time.time() < deadline:
-            # if self.read_reg(self.REGS.EFUSE_CMD_REG) == 0:
-            if self.read_reg(self.REGS.EFUSE_STATUS_REG) & 0x7 == 1:
-                return
+            cmds = self.REGS.EFUSE_PGM_CMD | self.REGS.EFUSE_READ_CMD
+            if self.read_reg(self.REGS.EFUSE_CMD_REG) & cmds == 0:
+                if self.read_reg(self.REGS.EFUSE_CMD_REG) & cmds == 0:
+                    # Due to a hardware error, we have to read READ_CMD again
+                    # to make sure the efuse clock is normal.
+                    # For PGM_CMD it is not necessary.
+                    return
         raise esptool.FatalError(
             "Timed out waiting for Efuse controller command to complete"
         )
@@ -383,6 +387,7 @@ class EfuseKeyPurposeField(EfuseField):
         ("SECURE_BOOT_DIGEST1",          10, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST1 (Secure Boot key digest)
         ("SECURE_BOOT_DIGEST2",          11, "DIGEST",   None,      "no_need_rd_protect"),   # SECURE_BOOT_DIGEST2 (Secure Boot key digest)
         ("KM_INIT_KEY",                  12, None,       None,      "need_rd_protect"),      # init key that is used for the generation of AES/ECDSA key
+        ("XTS_AES_256_KEY",              -1, "VIRTUAL",  None,      "no_need_rd_protect"),   # Virtual purpose splits to XTS_AES_256_KEY_1 and XTS_AES_256_KEY_2
     ]
 # fmt: on
     KEY_PURPOSES_NAME = [name[0] for name in KEY_PURPOSES]
