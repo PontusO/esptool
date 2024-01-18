@@ -171,6 +171,8 @@ class StubFlasher:
             self.data = None
             self.data_start = None
 
+        self.bss_start = stub.get("bss_start")
+
 
 class ESPLoader(object):
     """Base class providing access to ESP ROM & software stub bootloaders.
@@ -682,8 +684,17 @@ class ESPLoader(object):
             print("")  # end 'Connecting...' line
 
         if last_error is not None:
+            additional_msg = ""
+            if self.CHIP_NAME == "ESP32-C2" and self._port.baudrate < 115200:
+                additional_msg = (
+                    "\nNote: Please set a higher baud rate (--baud)"
+                    " if ESP32-C2 doesn't connect"
+                    " (at least 115200 Bd is recommended)."
+                )
+
             raise FatalError(
                 "Failed to connect to {}: {}"
+                f"{additional_msg}"
                 "\nFor troubleshooting steps visit: "
                 "https://docs.espressif.com/projects/esptool/en/latest/troubleshooting.html".format(  # noqa E501
                     self.CHIP_NAME, last_error
@@ -782,17 +793,17 @@ class ESPLoader(object):
             stub = StubFlasher(get_stub_json_path(self.CHIP_NAME))
             load_start = offset
             load_end = offset + size
-            for start, end in [
-                (stub.data_start, stub.data_start + len(stub.data)),
-                (stub.text_start, stub.text_start + len(stub.text)),
+            for stub_start, stub_end in [
+                (stub.bss_start, stub.data_start + len(stub.data)),  # DRAM = bss+data
+                (stub.text_start, stub.text_start + len(stub.text)),  # IRAM
             ]:
-                if load_start < end and load_end > start:
+                if load_start < stub_end and load_end > stub_start:
                     raise FatalError(
                         "Software loader is resident at 0x%08x-0x%08x. "
                         "Can't load binary at overlapping address range 0x%08x-0x%08x. "
                         "Either change binary loading address, or use the --no-stub "
                         "option to disable the software loader."
-                        % (start, end, load_start, load_end)
+                        % (stub_start, stub_end, load_start, load_end)
                     )
 
         return self.check_command(
@@ -1445,7 +1456,12 @@ class ESPLoader(object):
         #   See the self.XTAL_CLK_DIVIDER parameter for this factor.
         uart_div = self.read_reg(self.UART_CLKDIV_REG) & self.UART_CLKDIV_MASK
         est_xtal = (self._port.baudrate * uart_div) / 1e6 / self.XTAL_CLK_DIVIDER
-        norm_xtal = 40 if est_xtal > 33 else 26
+        if est_xtal > 45:
+            norm_xtal = 48
+        elif est_xtal > 33:
+            norm_xtal = 40
+        else:
+            norm_xtal = 26
         if abs(norm_xtal - est_xtal) > 1:
             print(
                 "WARNING: Detected crystal freq %.2fMHz is quite different to "

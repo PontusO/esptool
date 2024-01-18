@@ -16,7 +16,7 @@ except ImportError:
         "Please see the installation section in the esptool documentation"
         " for instructions on how to install it."
     )
-    exit(1)
+    sys.exit(1)
 
 
 # Example code to pull version from esptool module with regex, taken from
@@ -118,6 +118,7 @@ setup(
             "pytest",
             "pytest-rerunfailures",
             "requests",
+            "commitizen",
         ],
         "hsm": [
             "python-pkcs11",

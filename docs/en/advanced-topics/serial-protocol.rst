@@ -27,7 +27,7 @@ The host computer sends a SLIP encoded command request to the ESP chip. The ESP 
 Low Level Protocol
 ^^^^^^^^^^^^^^^^^^
 
-The bootloader protocol uses `SLIP <http://en.wikipedia.org/wiki/SLIP>`_ packet framing for data transmissions in both directions.
+The bootloader protocol uses `SLIP <https://en.wikipedia.org/wiki/Serial_Line_Internet_Protocol>`_ packet framing for data transmissions in both directions.
 
 Each SLIP packet begins and ends with ``0xC0``. Within the packet, all occurrences of ``0xC0`` and ``0xDB`` are replaced with ``0xDB 0xDC`` and ``0xDB 0xDD``, respectively. The replacing is to be done **after** the checksum and lengths are calculated, so the packet length may be longer than the ``size`` field below.
 
@@ -35,6 +35,11 @@ Command Packet
 ^^^^^^^^^^^^^^
 
 Each command is a SLIP packet initiated by the host and results in a response packet. Inside the packet, the packet consists of a header and a variable-length body. All multi-byte fields are little-endian.
+
+.. packetdiag:: diag/command_packet_format.diag
+    :caption: Command packet format
+    :align: center
+
 
 +--------+-------------+--------------------------------------------------------------------------------------------------------------------+
 | Byte   | Name        | Comment                                                                                                            |
@@ -54,6 +59,10 @@ Response Packet
 ^^^^^^^^^^^^^^^
 
 Each received command will result in a response SLIP packet sent from the ESP chip to the host. Contents of the response packet is:
+
+.. packetdiag:: diag/response_packet_format.diag
+    :caption: Command packet format
+    :align: center
 
 +--------+-------------+--------------------------------------------------------------------------------------------------------------+
 | Byte   | Name        | Comment                                                                                                      |
@@ -270,7 +279,7 @@ ROM loaders will not recognise these commands.
 Checksum
 ^^^^^^^^
 
-The checksum field is ignored (can be zero) for all comands except for MEM_DATA, FLASH_DATA, and FLASH_DEFL_DATA.
+The checksum field is ignored (can be zero) for all commands except for MEM_DATA, FLASH_DATA, and FLASH_DEFL_DATA.
 
 Each of the ``_DATA`` command packets (like ``FLASH_DEFL_DATA``, ``MEM_DATA``) has the same "data payload" format:
 
@@ -296,6 +305,14 @@ To calculate checksum, start with seed value 0xEF and XOR each individual byte i
 
 Functional Description
 ----------------------
+
+.. blockdiag:: diag/download_procedure_chart.diag
+    :caption: Download procedure flow chart
+    :align: center
+
+
+.. note::
+    This flow chart is used to illustrate the download procedure (writing to flash), other commands have different flows.
 
 Initial Synchronisation
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -384,7 +401,7 @@ The SPI _ATTACH command enables the SPI flash interface. It takes a 32-bit data 
 
 .. only:: not esp8266
 
-    On the {IDF_TARGET_NAME} stub loader, it is required to send this command before interacting with SPI flash.
+    On the {IDF_TARGET_NAME} stub loader sending this command before interacting with SPI flash is optional. On {IDF_TARGET_NAME} ROM loader, it is required to send this command before interacting with SPI flash.
 
     +------------------+----------------------------------------------------------------------------------------------------------------------------------+
     | Value            | Meaning                                                                                                                          |
@@ -400,9 +417,11 @@ The SPI _ATTACH command enables the SPI flash interface. It takes a 32-bit data 
 
     When writing the values of each pin as 6-bit numbers packed into the data word, each 6-bit value uses the following representation:
 
-    * Pin numbers 0 through 30 are represented as themselves.
-    * Pin numbers 32 & 33 are represented as values 30 & 31.
-    * It is not possible to represent pins 30 & 31 or pins higher than 33. This is the same 6-bit representation used by the ``SPI_PAD_CONFIG_xxx`` efuses.
+    .. only:: esp32
+
+        * Pin numbers 0 through 30 are represented as themselves.
+        * Pin numbers 32 & 33 are represented as values 30 & 31.
+        * It is not possible to represent pins 30 & 31 or pins higher than 33. This is the same 6-bit representation used by the ``SPI_PAD_CONFIG_xxx`` efuses.
 
     On {IDF_TARGET_NAME} ROM loader only, there is an additional 4 bytes in the data payload of this command. These bytes should all be set to zero.
 

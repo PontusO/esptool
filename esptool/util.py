@@ -99,6 +99,20 @@ def get_file_size(path_to_file):
     return file_size
 
 
+class PrintOnce:
+    """
+    Class for printing messages just once. Can be useful when running in a loop
+    """
+
+    def __init__(self) -> None:
+        self.already_printed = False
+
+    def __call__(self, text) -> None:
+        if not self.already_printed:
+            print(text)
+            self.already_printed = True
+
+
 class FatalError(RuntimeError):
     """
     Wrapper class for runtime errors that aren't caused by internal bugs, but by
@@ -167,7 +181,7 @@ class NotSupportedError(FatalError):
     def __init__(self, esp, function_name):
         FatalError.__init__(
             self,
-            "Function %s is not supported for %s." % (function_name, esp.CHIP_NAME),
+            f"{function_name} is not supported by {esp.CHIP_NAME}.",
         )
 
 

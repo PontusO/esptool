@@ -230,13 +230,16 @@ class EsptoolTestCase:
         # Restore the stored working directory
         os.chdir(self.stored_dir)
 
-    def readback(self, offset, length):
+    def readback(self, offset, length, spi_connection=None):
         """Read contents of flash back, return to caller."""
         dump_file = tempfile.NamedTemporaryFile(delete=False)  # a file we can read into
         try:
-            self.run_esptool(
+            cmd = (
                 f"--before default_reset read_flash {offset} {length} {dump_file.name}"
             )
+            if spi_connection:
+                cmd += f" --spi-connection {spi_connection}"
+            self.run_esptool(cmd)
             with open(dump_file.name, "rb") as f:
                 rb = f.read()
 
@@ -248,8 +251,16 @@ class EsptoolTestCase:
             dump_file.close()
             os.unlink(dump_file.name)
 
-    def verify_readback(self, offset, length, compare_to, is_bootloader=False):
-        rb = self.readback(offset, length)
+    def diff(self, readback, compare_to):
+        for rb_b, ct_b, offs in zip(readback, compare_to, range(len(readback))):
+            assert (
+                rb_b == ct_b
+            ), f"First difference at offset {offs:#x} Expected {ct_b} got {rb_b}"
+
+    def verify_readback(
+        self, offset, length, compare_to, is_bootloader=False, spi_connection=None
+    ):
+        rb = self.readback(offset, length, spi_connection)
         with open(compare_to, "rb") as f:
             ct = f.read()
         if len(rb) != len(ct):
@@ -263,10 +274,7 @@ class EsptoolTestCase:
             assert ct[0] == rb[0], "First bytes should be identical"
             rb = rb[8:]
             ct = ct[8:]
-        for rb_b, ct_b, offs in zip(rb, ct, range(len(rb))):
-            assert (
-                rb_b == ct_b
-            ), f"First difference at offset {offs:#x} Expected {ct_b} got {rb_b}"
+        self.diff(rb, ct)
 
 
 @pytest.mark.skipif(arg_chip != "esp32", reason="ESP32 only")
@@ -391,22 +399,27 @@ class TestFlashing(EsptoolTestCase):
         self.verify_readback(4096, 50 * 1024, "images/fifty_kb.bin")
 
     def test_short_flash_hex(self):
-        _, f = tempfile.mkstemp(suffix=".hex")
+        fd, f = tempfile.mkstemp(suffix=".hex")
         try:
             self.run_esptool(f"merge_bin --format hex 0x0 images/one_kb.bin -o {f}")
+            # make sure file is closed before running next command (mainly for Windows)
+            os.close(fd)
             self.run_esptool(f"write_flash 0x0 {f}")
             self.verify_readback(0, 1024, "images/one_kb.bin")
         finally:
             os.unlink(f)
 
     def test_adjacent_flash_hex(self):
-        _, f1 = tempfile.mkstemp(suffix=".hex")
-        _, f2 = tempfile.mkstemp(suffix=".hex")
+        fd1, f1 = tempfile.mkstemp(suffix=".hex")
+        fd2, f2 = tempfile.mkstemp(suffix=".hex")
         try:
             self.run_esptool(f"merge_bin --format hex 0x0 images/sector.bin -o {f1}")
+            # make sure file is closed before running next command (mainly for Windows)
+            os.close(fd1)
             self.run_esptool(
                 f"merge_bin --format hex 0x1000 images/fifty_kb.bin -o {f2}"
             )
+            os.close(fd2)
             self.run_esptool(f"write_flash 0x0 {f1} 0x1000 {f2}")
             self.verify_readback(0, 4096, "images/sector.bin")
             self.verify_readback(4096, 50 * 1024, "images/fifty_kb.bin")
@@ -415,11 +428,13 @@ class TestFlashing(EsptoolTestCase):
             os.unlink(f2)
 
     def test_adjacent_flash_mixed(self):
-        _, f = tempfile.mkstemp(suffix=".hex")
+        fd, f = tempfile.mkstemp(suffix=".hex")
         try:
             self.run_esptool(
                 f"merge_bin --format hex 0x1000 images/fifty_kb.bin -o {f}"
             )
+            # make sure file is closed before running next command (mainly for Windows)
+            os.close(fd)
             self.run_esptool(f"write_flash 0x0 images/sector.bin 0x1000 {f}")
             self.verify_readback(0, 4096, "images/sector.bin")
             self.verify_readback(4096, 50 * 1024, "images/fifty_kb.bin")
@@ -657,11 +672,14 @@ class TestSecurityInfo(EsptoolTestCase):
         assert "Crypt Count" in res
         assert "Key Purposes" in res
         if arg_chip != "esp32s2":
-            esp = esptool.get_default_connected_device(
-                [arg_port], arg_port, 10, 115200, arg_chip
-            )
-            assert f"Chip ID: {esp.IMAGE_CHIP_ID}" in res
-            assert "API Version" in res
+            try:
+                esp = esptool.get_default_connected_device(
+                    [arg_port], arg_port, 10, 115200, arg_chip
+                )
+                assert f"Chip ID: {esp.IMAGE_CHIP_ID}" in res
+                assert "API Version" in res
+            finally:
+                esp._port.close()
         assert "Secure Boot" in res
         assert "Flash Encryption" in res
 
@@ -720,6 +738,32 @@ class TestFlashSizes(EsptoolTestCase):
         # header should be the same as in the .bin file
         self.verify_readback(offset, image_len, image)
 
+    @pytest.mark.skipif(
+        arg_chip == "esp8266", reason="ESP8266 does not support read_flash_slow"
+    )
+    def test_read_nostub_high_offset(self):
+        offset = 0x300000
+        length = 1024
+        self.run_esptool(f"write_flash -fs detect {offset} images/one_kb.bin")
+        dump_file = tempfile.NamedTemporaryFile(delete=False)
+        # readback with no-stub and flash-size set
+        try:
+            self.run_esptool(
+                f"--no-stub read_flash -fs detect {offset} 1024 {dump_file.name}"
+            )
+            with open(dump_file.name, "rb") as f:
+                rb = f.read()
+            assert length == len(
+                rb
+            ), f"read_flash length {length} offset {offset:#x} yielded {len(rb)} bytes!"
+        finally:
+            dump_file.close()
+            os.unlink(dump_file.name)
+        # compare files
+        with open("images/one_kb.bin", "rb") as f:
+            ct = f.read()
+        self.diff(rb, ct)
+
 
 class TestFlashDetection(EsptoolTestCase):
     @pytest.mark.quick_test
@@ -762,6 +806,67 @@ class TestFlashDetection(EsptoolTestCase):
         )
         assert "Manufacturer:" in res
         assert "Device:" in res
+
+    @pytest.mark.quick_test
+    @pytest.mark.skipif(
+        arg_chip not in ["esp32c2"],
+        reason="This test make sense only for EPS32-C2",
+    )
+    def test_flash_size(self):
+        """Test ESP32-C2 efuse block for flash size feature"""
+        # ESP32-C2 class inherits methods from ESP32-C3 class
+        # but it does not have the same amount of efuse blocks
+        # the methods are overwritten
+        # in case anything changes this test will fail to remind us
+        res = self.run_esptool("flash_id")
+        lines = res.splitlines()
+        for line in lines:
+            assert "embedded flash" not in line.lower()
+
+
+@pytest.mark.skipif(
+    os.getenv("ESPTOOL_TEST_SPI_CONN") is None, reason="Needs external flash"
+)
+class TestExternalFlash(EsptoolTestCase):
+    conn = os.getenv("ESPTOOL_TEST_SPI_CONN")
+
+    def test_short_flash_to_external_stub(self):
+        # First flash internal flash, then external
+        self.run_esptool("write_flash 0x0 images/one_kb.bin")
+        self.run_esptool(
+            f"write_flash --spi-connection {self.conn} 0x0 images/sector.bin"
+        )
+
+        self.verify_readback(0, 1024, "images/one_kb.bin")
+        self.verify_readback(0, 1024, "images/sector.bin", spi_connection=self.conn)
+
+        # First flash external flash, then internal
+        self.run_esptool(
+            f"write_flash --spi-connection {self.conn} 0x0 images/one_kb.bin"
+        )
+        self.run_esptool("write_flash 0x0 images/sector.bin")
+
+        self.verify_readback(0, 1024, "images/sector.bin")
+        self.verify_readback(0, 1024, "images/one_kb.bin", spi_connection=self.conn)
+
+    def test_short_flash_to_external_ROM(self):
+        # First flash internal flash, then external
+        self.run_esptool("--no-stub write_flash 0x0 images/one_kb.bin")
+        self.run_esptool(
+            f"--no-stub write_flash --spi-connection {self.conn} 0x0 images/sector.bin"
+        )
+
+        self.verify_readback(0, 1024, "images/one_kb.bin")
+        self.verify_readback(0, 1024, "images/sector.bin", spi_connection=self.conn)
+
+        # First flash external flash, then internal
+        self.run_esptool(
+            f"--no-stub write_flash --spi-connection {self.conn} 0x0 images/one_kb.bin"
+        )
+        self.run_esptool("--no-stub write_flash 0x0 images/sector.bin")
+
+        self.verify_readback(0, 1024, "images/sector.bin")
+        self.verify_readback(0, 1024, "images/one_kb.bin", spi_connection=self.conn)
 
 
 @pytest.mark.skipif(
@@ -989,7 +1094,13 @@ class TestLoadRAM(EsptoolTestCase):
 
     def verify_output(self, expected_out: List[bytes]):
         """Verify that at least one element of expected_out is in serial output"""
-        with serial.serial_for_url(arg_port, arg_baud) as p:
+        # Setting rtscts to true enables hardware flow control.
+        # This removes unwanted RTS logic level changes for some machines
+        # (and, therefore, chip resets)
+        # when the port is opened by the following function.
+        # As a result, the app loaded to RAM has a chance to run and send
+        # "Hello world" data without unwanted chip reset.
+        with serial.serial_for_url(arg_port, arg_baud, rtscts=True) as p:
             p.timeout = 5
             output = p.read(100)
             print(f"Output: {output}")
@@ -1013,12 +1124,14 @@ class TestLoadRAM(EsptoolTestCase):
         The "hello world" binary programs for each chip print
         "Hello world!\n" to the serial port.
         """
-        _, f = tempfile.mkstemp(suffix=".hex")
+        fd, f = tempfile.mkstemp(suffix=".hex")
         try:
             self.run_esptool(
                 f"merge_bin --format hex -o {f} 0x0 "
                 f"images/ram_helloworld/helloworld-{arg_chip}.bin"
             )
+            # make sure file is closed before running next command (mainly for Windows)
+            os.close(fd)
             self.run_esptool(f"load_ram {f}")
             self.verify_output(
                 [b"Hello world!", b'\xce?\x13\x05\x04\xd0\x97A\x11"\xc4\x06\xc67\x04']
@@ -1119,6 +1232,30 @@ class TestVirtualPort(TestAutoDetect):
                 port=rfc2217_port,
             )
         self.verify_readback(0, 50 * 1024, "images/fifty_kb.bin")
+
+    @pytest.fixture
+    def pty_port(self):
+        import pty
+
+        master_fd, slave_fd = pty.openpty()
+        yield os.ttyname(slave_fd)
+        os.close(master_fd)
+        os.close(slave_fd)
+
+    @pytest.mark.host_test
+    def test_pty_port(self, pty_port):
+        cmd = [sys.executable, "-m", "esptool", "--port", pty_port, "chip_id"]
+        output = subprocess.run(
+            cmd,
+            cwd=TEST_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        # no chip connected so command should fail
+        assert output.returncode != 0
+        output = output.stdout.decode("utf-8")
+        print(output)  # for logging
+        assert "WARNING: Chip was NOT reset." in output
 
 
 @pytest.mark.quick_test
@@ -1229,10 +1366,7 @@ class TestMakeImage(EsptoolTestCase):
                 f"WARNING: Expected length {len(ct)} doesn't match comparison {len(rb)}"
             )
         print(f"Readback {len(rb)} bytes")
-        for rb_b, ct_b, offs in zip(rb, ct, range(len(rb))):
-            assert (
-                rb_b == ct_b
-            ), f"First difference at offset {offs:#x} Expected {ct_b} got {rb_b}"
+        self.diff(rb, ct)
 
     def test_make_image(self):
         output = self.run_esptool(

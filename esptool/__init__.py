@@ -28,7 +28,7 @@ __all__ = [
     "write_mem",
 ]
 
-__version__ = "4.7-dev"
+__version__ = "4.7.0"
 
 import argparse
 import inspect
@@ -177,9 +177,9 @@ def main(argv=None, esp=None):
         parent.add_argument(
             "--spi-connection",
             "-sc",
-            help="ESP32-only argument. Override default SPI Flash connection. "
+            help="Override default SPI Flash connection. "
             "Value can be SPI, HSPI or a comma-separated list of 5 I/O numbers "
-            "to use for SPI flash (CLK,Q,D,HD,CS).",
+            "to use for SPI flash (CLK,Q,D,HD,CS). Not supported with ESP8266.",
             action=SpiConnectionAction,
         )
 
@@ -217,7 +217,12 @@ def main(argv=None, esp=None):
         default="0xFFFFFFFF",
     )
 
-    def add_spi_flash_subparsers(parent, allow_keep, auto_detect):
+    def add_spi_flash_subparsers(
+        parent: argparse.ArgumentParser,
+        allow_keep: bool,
+        auto_detect: bool,
+        size_only: bool = False,
+    ):
         """Add common parser arguments for SPI flash properties"""
         extra_keep_args = ["keep"] if allow_keep else []
 
@@ -234,33 +239,35 @@ def main(argv=None, esp=None):
             extra_fs_message = ""
             flash_sizes = []
 
-        parent.add_argument(
-            "--flash_freq",
-            "-ff",
-            help="SPI Flash frequency",
-            choices=extra_keep_args
-            + [
-                "80m",
-                "60m",
-                "48m",
-                "40m",
-                "30m",
-                "26m",
-                "24m",
-                "20m",
-                "16m",
-                "15m",
-                "12m",
-            ],
-            default=os.environ.get("ESPTOOL_FF", "keep" if allow_keep else None),
-        )
-        parent.add_argument(
-            "--flash_mode",
-            "-fm",
-            help="SPI Flash mode",
-            choices=extra_keep_args + ["qio", "qout", "dio", "dout"],
-            default=os.environ.get("ESPTOOL_FM", "keep" if allow_keep else "qio"),
-        )
+        if not size_only:
+            parent.add_argument(
+                "--flash_freq",
+                "-ff",
+                help="SPI Flash frequency",
+                choices=extra_keep_args
+                + [
+                    "80m",
+                    "60m",
+                    "48m",
+                    "40m",
+                    "30m",
+                    "26m",
+                    "24m",
+                    "20m",
+                    "16m",
+                    "15m",
+                    "12m",
+                ],
+                default=os.environ.get("ESPTOOL_FF", "keep" if allow_keep else None),
+            )
+            parent.add_argument(
+                "--flash_mode",
+                "-fm",
+                help="SPI Flash mode",
+                choices=extra_keep_args + ["qio", "qout", "dio", "dout"],
+                default=os.environ.get("ESPTOOL_FM", "keep" if allow_keep else "qio"),
+            )
+
         parent.add_argument(
             "--flash_size",
             "-fs",
@@ -540,7 +547,9 @@ def main(argv=None, esp=None):
     parser_read_flash = subparsers.add_parser(
         "read_flash", help="Read SPI flash content"
     )
-    add_spi_connection_arg(parser_read_flash)
+    add_spi_flash_subparsers(
+        parser_read_flash, allow_keep=True, auto_detect=True, size_only=True
+    )
     parser_read_flash.add_argument("address", help="Start address", type=arg_auto_int)
     parser_read_flash.add_argument(
         "size",
@@ -770,14 +779,22 @@ def main(argv=None, esp=None):
                     "Keeping initial baud rate %d" % initial_baud
                 )
 
-        # override common SPI flash parameter stuff if configured to do so
+        # Override the common SPI flash parameter stuff if configured to do so
         if hasattr(args, "spi_connection") and args.spi_connection is not None:
-            if esp.CHIP_NAME != "ESP32":
-                raise FatalError(
-                    "Chip %s does not support --spi-connection option." % esp.CHIP_NAME
-                )
-            print("Configuring SPI flash mode...")
-            esp.flash_spi_attach(args.spi_connection)
+            spi_config = args.spi_connection
+            if args.spi_connection == "SPI":
+                value = 0
+            elif args.spi_connection == "HSPI":
+                value = 1
+            else:
+                esp.check_spi_connection(args.spi_connection)
+                # Encode the pin numbers as a 32-bit integer with packed 6-bit values,
+                # the same way the ESP ROM takes them
+                clk, q, d, hd, cs = args.spi_connection
+                spi_config = f"CLK:{clk}, Q:{q}, D:{d}, HD:{hd}, CS:{cs}"
+                value = (hd << 24) | (cs << 18) | (d << 12) | (q << 6) | clk
+            print(f"Configuring SPI flash mode ({spi_config})...")
+            esp.flash_spi_attach(value)
         elif args.no_stub:
             print("Enabling default SPI flash mode...")
             # ROM loader doesn't enable flash unless we explicitly do it
@@ -846,6 +863,15 @@ def main(argv=None, esp=None):
                         "Try checking the chip connections or removing "
                         "any other hardware connected to IOs."
                     )
+                    if (
+                        hasattr(args, "spi_connection")
+                        and args.spi_connection is not None
+                    ):
+                        print(
+                            "Some GPIO pins might be used by other peripherals, "
+                            "try using another --spi-connection combination."
+                        )
+
             except FatalError as e:
                 raise FatalError(f"Unable to verify flash chip connection ({e}).")
 
@@ -1023,43 +1049,31 @@ class SpiConnectionAction(argparse.Action):
     """
 
     def __call__(self, parser, namespace, value, option_string=None):
-        if value.upper() == "SPI":
-            value = 0
-        elif value.upper() == "HSPI":
-            value = 1
+        if value.upper() in ["SPI", "HSPI"]:
+            values = value.upper()
         elif "," in value:
             values = value.split(",")
             if len(values) != 5:
                 raise argparse.ArgumentError(
                     self,
-                    "%s is not a valid list of comma-separate pin numbers. "
-                    "Must be 5 numbers - CLK,Q,D,HD,CS." % value,
+                    f"{value} is not a valid list of comma-separate pin numbers. "
+                    "Must be 5 numbers - CLK,Q,D,HD,CS.",
                 )
             try:
                 values = tuple(int(v, 0) for v in values)
             except ValueError:
                 raise argparse.ArgumentError(
                     self,
-                    "%s is not a valid argument. All pins must be numeric values"
-                    % values,
+                    f"{values} is not a valid argument. "
+                    "All pins must be numeric values",
                 )
-            if any([v for v in values if v > 33 or v < 0]):
-                raise argparse.ArgumentError(
-                    self, "Pin numbers must be in the range 0-33."
-                )
-            # encode the pin numbers as a 32-bit integer with packed 6-bit values,
-            # the same way ESP32 ROM takes them
-            # TODO: make this less ESP32 ROM specific somehow...
-            clk, q, d, hd, cs = values
-            value = (hd << 24) | (cs << 18) | (d << 12) | (q << 6) | clk
         else:
             raise argparse.ArgumentError(
                 self,
-                "%s is not a valid spi-connection value. "
-                "Values are SPI, HSPI, or a sequence of 5 pin numbers CLK,Q,D,HD,CS)."
-                % value,
+                f"{value} is not a valid spi-connection value. "
+                "Values are SPI, HSPI, or a sequence of 5 pin numbers - CLK,Q,D,HD,CS.",
             )
-        setattr(namespace, self.dest, value)
+        setattr(namespace, self.dest, values)
 
 
 class AutoHex2BinAction(argparse.Action):

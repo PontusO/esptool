@@ -19,6 +19,7 @@ from .loader import ESPLoader
 from .targets import (
     ESP32C2ROM,
     ESP32C3ROM,
+    ESP32C5BETA3ROM,
     ESP32C6BETAROM,
     ESP32C6ROM,
     ESP32H2BETA1ROM,
@@ -82,6 +83,7 @@ def LoadFirmwareImage(chip, image_file):
                 "esp32h2beta2": ESP32H2BETA2FirmwareImage,
                 "esp32c2": ESP32C2FirmwareImage,
                 "esp32c6": ESP32C6FirmwareImage,
+                "esp32c5beta3": ESP32C5BETA3FirmwareImage,
                 "esp32h2": ESP32H2FirmwareImage,
                 "esp32p4": ESP32P4FirmwareImage,
             }[chip](f)
@@ -736,15 +738,23 @@ class ESP32FirmwareImage(BaseFirmwareImage):
                 flash_segments.reverse()
                 for segment in flash_segments:
                     pad_len = get_alignment_data_needed(segment)
-                    while pad_len > 0:
-                        pad_segment = ImageSegment(0, b"\x00" * pad_len, f.tell())
-                        self.save_segment(f, pad_segment)
-                        total_segments += 1
-                        pad_len = get_alignment_data_needed(segment)
-                    # write the flash segment
-                    assert (
-                        f.tell() + 8
-                    ) % self.IROM_ALIGN == segment.addr % self.IROM_ALIGN
+                    # Some chips have a non-zero load offset (eg. 0x1000)
+                    # therefore we shift the ROM segments "-load_offset"
+                    # so it will be aligned properly after it is flashed
+                    align_min = (
+                        self.ROM_LOADER.BOOTLOADER_FLASH_OFFSET - self.SEG_HEADER_LEN
+                    )
+                    if pad_len < align_min:
+                        print("Unable to align the segment!")
+                        break
+                    pad_len -= self.ROM_LOADER.BOOTLOADER_FLASH_OFFSET
+                    pad_segment = ImageSegment(0, b"\x00" * pad_len, f.tell())
+                    self.save_segment(f, pad_segment)
+                    total_segments += 1
+                    # check the alignment
+                    assert (f.tell() + 8 + self.ROM_LOADER.BOOTLOADER_FLASH_OFFSET) % (
+                        self.IROM_ALIGN
+                    ) == segment.addr % self.IROM_ALIGN
                     # save the flash segment but not saving its checksum neither
                     # saving the number of flash segments, since ROM bootloader
                     # should "not see" them
@@ -1114,6 +1124,15 @@ class ESP32C6FirmwareImage(ESP32FirmwareImage):
 ESP32C6ROM.BOOTLOADER_IMAGE = ESP32C6FirmwareImage
 
 
+class ESP32C5BETA3FirmwareImage(ESP32C6FirmwareImage):
+    """ESP32C5BETA3 Firmware Image almost exactly the same as ESP32C6FirmwareImage"""
+
+    ROM_LOADER = ESP32C5BETA3ROM
+
+
+ESP32C5BETA3ROM.BOOTLOADER_IMAGE = ESP32C5BETA3FirmwareImage
+
+
 class ESP32P4FirmwareImage(ESP32FirmwareImage):
     """ESP32P4 Firmware Image almost exactly the same as ESP32FirmwareImage"""
 
@@ -1135,6 +1154,7 @@ ESP32H2ROM.BOOTLOADER_IMAGE = ESP32H2FirmwareImage
 class ELFFile(object):
     SEC_TYPE_PROGBITS = 0x01
     SEC_TYPE_STRTAB = 0x03
+    SEC_TYPE_NOBITS = 0x08  # e.g. .bss section
     SEC_TYPE_INITARRAY = 0x0E
     SEC_TYPE_FINIARRAY = 0x0F
 
@@ -1225,6 +1245,7 @@ class ELFFile(object):
 
         all_sections = [read_section_header(offs) for offs in section_header_offsets]
         prog_sections = [s for s in all_sections if s[1] in ELFFile.PROG_SEC_TYPES]
+        nobits_secitons = [s for s in all_sections if s[1] == ELFFile.SEC_TYPE_NOBITS]
 
         # search for the string table section
         if not (shstrndx * self.LEN_SEC_HEADER) in section_header_offsets:
@@ -1256,6 +1277,11 @@ class ELFFile(object):
             if lma != 0 and size > 0
         ]
         self.sections = prog_sections
+        self.nobits_sections = [
+            ELFSection(lookup_string(n_offs), lma, b"")
+            for (n_offs, _type, lma, size, offs) in nobits_secitons
+            if lma != 0 and size > 0
+        ]
 
     def _read_segments(self, f, segment_header_offs, segment_header_count, shstrndx):
         f.seek(segment_header_offs)
