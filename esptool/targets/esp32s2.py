@@ -5,6 +5,7 @@
 
 import os
 import struct
+from typing import Dict
 
 from .esp32 import ESP32ROM
 from ..loader import ESPLoader
@@ -81,6 +82,7 @@ class ESP32S2ROM(ESP32ROM):
 
     GPIO_STRAP_REG = 0x3F404038
     GPIO_STRAP_SPI_BOOT_MASK = 0x8  # Not download mode
+    GPIO_STRAP_VDDSPI_MASK = 1 << 4
     RTC_CNTL_OPTION1_REG = 0x3F408128
     RTC_CNTL_FORCE_DOWNLOAD_BOOT_MASK = 0x1  # Is download mode forced over USB?
 
@@ -99,7 +101,28 @@ class ESP32S2ROM(ESP32ROM):
         [0x50000000, 0x50002000, "RTC_DATA"],
     ]
 
+    EFUSE_VDD_SPI_REG = EFUSE_BASE + 0x34
+    VDD_SPI_XPD = 1 << 4
+    VDD_SPI_TIEH = 1 << 5
+    VDD_SPI_FORCE = 1 << 6
+
     UF2_FAMILY_ID = 0xBFDD4EEE
+
+    EFUSE_MAX_KEY = 5
+    KEY_PURPOSES: Dict[int, str] = {
+        0: "USER/EMPTY",
+        1: "RESERVED",
+        2: "XTS_AES_256_KEY_1",
+        3: "XTS_AES_256_KEY_2",
+        4: "XTS_AES_128_KEY",
+        5: "HMAC_DOWN_ALL",
+        6: "HMAC_DOWN_JTAG",
+        7: "HMAC_DOWN_DIGITAL_SIGNATURE",
+        8: "HMAC_UP",
+        9: "SECURE_BOOT_DIGEST0",
+        10: "SECURE_BOOT_DIGEST1",
+        11: "SECURE_BOOT_DIGEST2",
+    }
 
     def get_pkg_version(self):
         num_word = 4
@@ -183,6 +206,9 @@ class ESP32S2ROM(ESP32ROM):
         # ESP32-S2 XTAL is fixed to 40MHz
         return 40
 
+    def _get_rtc_cntl_flash_voltage(self):
+        return None  # not supported on ESP32-S2
+
     def override_vddsdio(self, new_voltage):
         raise NotImplementedInROMError(
             "VDD_SDIO overrides are not supported for ESP32-S2"
@@ -215,8 +241,10 @@ class ESP32S2ROM(ESP32ROM):
         )
 
     def get_key_block_purpose(self, key_block):
-        if key_block < 0 or key_block > 5:
-            raise FatalError("Valid key block numbers must be in range 0-5")
+        if key_block < 0 or key_block > self.EFUSE_MAX_KEY:
+            raise FatalError(
+                f"Valid key block numbers must be in range 0-{self.EFUSE_MAX_KEY}"
+            )
 
         reg, shift = [
             (self.EFUSE_PURPOSE_KEY0_REG, self.EFUSE_PURPOSE_KEY0_SHIFT),
@@ -230,7 +258,9 @@ class ESP32S2ROM(ESP32ROM):
 
     def is_flash_encryption_key_valid(self):
         # Need to see either an AES-128 key or two AES-256 keys
-        purposes = [self.get_key_block_purpose(b) for b in range(6)]
+        purposes = [
+            self.get_key_block_purpose(b) for b in range(self.EFUSE_MAX_KEY + 1)
+        ]
 
         if any(p == self.PURPOSE_VAL_XTS_AES128_KEY for p in purposes):
             return True

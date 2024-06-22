@@ -69,10 +69,7 @@ jobs:
         - name: Checkout
           uses: actions/checkout@master
 
-        - name: Lint with flake8
+        - name: Run pre-commit hooks
           run: |
             pip install --extra-index-url https://dl.espressif.com/pypi -e .[dev]
-            python -m flake8
-
-        - name: Check formatting with Black
-          uses: psf/black@stable
+            pre-commit run --all-files

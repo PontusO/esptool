@@ -1,11 +1,13 @@
-{IDF_TARGET_BOOTLOADER_OFFSET:default="0x0", esp32="0x1000", esp32s2="0x1000"}
+{IDF_TARGET_BOOTLOADER_OFFSET:default="0x0", esp32="0x1000", esp32s2="0x1000", esp32p4="0x2000"}
 
 .. _troubleshooting:
 
 Troubleshooting
 ===============
 
-Flashing problems can be fiddly to troubleshoot. Try the suggestions here if you're having problems:
+Flashing problems can be fiddly to troubleshoot. The underlying issue can be caused by the drivers, OS, hardware, or even a combination of these. If your board is a custom design, check the `ESP Hardware Design Guidelines <https://docs.espressif.com/projects/esp-hardware-design-guidelines/>`_ or consider using our `free-of-charge schematic and PCB review service <https://www.espressif.com/en/contact-us/circuit-schematic-pcb-design-review>`_.
+
+Try the following suggestions if your issues persist:
 
 Bootloader Won't Respond
 ------------------------

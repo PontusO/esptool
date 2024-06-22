@@ -68,9 +68,16 @@ class EspEfuses(base_fields.EspEfusesBase):
     debug = False
     do_not_confirm = False
 
-    def __init__(self, esp, skip_connect=False, debug=False, do_not_confirm=False):
+    def __init__(
+        self,
+        esp,
+        skip_connect=False,
+        debug=False,
+        do_not_confirm=False,
+        extend_efuse_table=None,
+    ):
         self.Blocks = EfuseDefineBlocks()
-        self.Fields = EfuseDefineFields()
+        self.Fields = EfuseDefineFields(extend_efuse_table)
         self.REGS = EfuseDefineRegisters
         self.BURN_BLOCK_DATA_NAMES = self.Blocks.get_burn_block_data_names()
         self.BLOCKS_FOR_KEYS = self.Blocks.get_blocks_for_keys()
@@ -157,10 +164,14 @@ class EspEfuses(base_fields.EspEfusesBase):
         raise KeyError
 
     def read_coding_scheme(self):
-        self.coding_scheme = (
+        coding_scheme = (
             self.read_efuse(self.REGS.EFUSE_CODING_SCHEME_WORD)
             & self.REGS.EFUSE_CODING_SCHEME_MASK
         )
+        if coding_scheme == self.REGS.CODING_SCHEME_NONE_RECOVERY:
+            self.coding_scheme = self.REGS.CODING_SCHEME_NONE
+        else:
+            self.coding_scheme = coding_scheme
 
     def print_status_regs(self):
         print("")

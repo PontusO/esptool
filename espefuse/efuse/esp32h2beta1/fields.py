@@ -58,9 +58,16 @@ class EspEfuses(base_fields.EspEfusesBase):
     debug = False
     do_not_confirm = False
 
-    def __init__(self, esp, skip_connect=False, debug=False, do_not_confirm=False):
+    def __init__(
+        self,
+        esp,
+        skip_connect=False,
+        debug=False,
+        do_not_confirm=False,
+        extend_efuse_table=None,
+    ):
         self.Blocks = EfuseDefineBlocks()
-        self.Fields = EfuseDefineFields()
+        self.Fields = EfuseDefineFields(extend_efuse_table)
         self.REGS = EfuseDefineRegisters
         self.BURN_BLOCK_DATA_NAMES = self.Blocks.get_burn_block_data_names()
         self.BLOCKS_FOR_KEYS = self.Blocks.get_blocks_for_keys()
@@ -95,7 +102,7 @@ class EspEfuses(base_fields.EspEfusesBase):
                 for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES
             ]
         else:
-            if self["BLK_VERSION_MAJOR"].get() == 1:
+            if self["BLK_VERSION_MINOR"].get() == 2:
                 self.efuses += [
                     EfuseField.convert(self, efuse)
                     for efuse in self.Fields.BLOCK2_CALIBRATION_EFUSES

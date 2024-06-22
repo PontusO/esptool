@@ -4,7 +4,11 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-from collections import namedtuple
+from collections import Counter, namedtuple
+import esptool
+from typing import Optional, List
+
+from .csv_table_parser import CSVFuseTable
 
 
 class EfuseRegistersBase(object):
@@ -19,9 +23,9 @@ class EfuseRegistersBase(object):
 
 
 class EfuseBlocksBase(object):
-    BLOCKS = None
+    BLOCKS: Optional[List] = None
     NamedtupleBlock = namedtuple(
-        "Block",
+        "NamedtupleBlock",
         "name alias id rd_addr wr_addr write_disable_bit "
         "read_disable_bit len key_purpose",
     )
@@ -49,7 +53,7 @@ class Field:
     word = None
     pos = None
     bit_len = 0
-    alt_names = []
+    alt_names: List[str] = []
     type = ""
     write_disable_bit = None
     read_disable_bit = None
@@ -60,8 +64,8 @@ class Field:
 
 
 class EfuseFieldsBase(object):
-    def __init__(self, e_desc) -> None:
-        self.ALL_EFUSES = []
+    def __init__(self, e_desc, extend_efuse_table_file) -> None:
+        self.ALL_EFUSES: List = []
 
         def set_category_and_class_type(efuse, name):
             def includes(name, names):
@@ -169,3 +173,60 @@ class EfuseFieldsBase(object):
                 )
                 set_category_and_class_type(d, e_name)
                 self.ALL_EFUSES.append(d)
+
+        if self.extend_efuses(extend_efuse_table_file):
+            self.check_name_duplicates()
+
+    def check_name_duplicates(self):
+        names = [n.name for n in self.ALL_EFUSES]
+        for n in self.ALL_EFUSES:
+            if n.alt_names:
+                names.extend(n.alt_names)
+
+        name_counts = Counter(names)
+        duplicates = {name for name, count in name_counts.items() if count > 1}
+        if duplicates:
+            print("Names that are not unique: " + ", ".join(duplicates))
+            raise esptool.FatalError("Duplicate names found in eFuses")
+
+    def extend_efuses(self, extend_efuse_table_file):
+        if extend_efuse_table_file:
+            table = CSVFuseTable.from_csv(extend_efuse_table_file.read())
+            for p in table:
+                item = Field()
+                item.name = p.field_name
+                item.block = p.efuse_block
+                item.word = p.bit_start // 32
+                item.pos = p.bit_start % 32
+                item.bit_len = p.bit_count
+                if p.bit_count == 1:
+                    str_type = "bool"
+                else:
+                    if p.bit_count > 32 and p.bit_count % 8 == 0:
+                        str_type = f"bytes:{p.bit_count // 8}"
+                    else:
+                        str_type = f"uint:{p.bit_count}"
+                item.type = str_type
+                item.write_disable_bit = None
+                item.read_disable_bit = None
+                if item.block != 0:
+                    # look for an already configured field associated with this field
+                    # to take the WR_DIS and RID_DIS bits
+                    for field in self.ALL_EFUSES:
+                        if field.block == item.block:
+                            if field.write_disable_bit is not None:
+                                item.write_disable_bit = field.write_disable_bit
+                            if field.read_disable_bit is not None:
+                                item.read_disable_bit = field.read_disable_bit
+                            if (
+                                item.read_disable_bit is not None
+                                and item.write_disable_bit is not None
+                            ):
+                                break
+                item.category = "User"
+                item.description = p.comment
+                item.alt_names = p.alt_names.split(" ") if p.alt_names else []
+                item.dictionary = ""
+                self.ALL_EFUSES.append(item)
+            return True
+        return False

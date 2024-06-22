@@ -19,7 +19,7 @@ class EmulateEfuseController(EmulateEfuseControllerBase):
 
     def __init__(self, efuse_file=None, debug=False):
         self.Blocks = EfuseDefineBlocks
-        self.Fields = EfuseDefineFields()
+        self.Fields = EfuseDefineFields(None)
         self.REGS = EfuseDefineRegisters
         super(EmulateEfuseController, self).__init__(efuse_file, debug)
 
@@ -38,12 +38,7 @@ class EmulateEfuseController(EmulateEfuseControllerBase):
         if addr == self.REGS.APB_CTL_DATE_ADDR:
             return self.REGS.APB_CTL_DATE_V << self.REGS.APB_CTL_DATE_S
         else:
-            val = 0
-            if addr == self.REGS.EFUSE_BLK0_RDATA3_REG:
-                val = self.REGS.EFUSE_RD_CHIP_VER_REV1
-            if addr == self.REGS.EFUSE_BLK0_RDATA5_REG:
-                val = self.REGS.EFUSE_RD_CHIP_VER_REV2
-            return val | super(EmulateEfuseController, self).read_reg(addr)
+            return super(EmulateEfuseController, self).read_reg(addr)
 
     """ << esptool method end """
 
@@ -75,10 +70,14 @@ class EmulateEfuseController(EmulateEfuseControllerBase):
                 self.save_to_file()
 
     def read_raw_coding_scheme(self):
-        return (
+        coding_scheme = (
             self.read_efuse(self.REGS.EFUSE_CODING_SCHEME_WORD)
             & self.REGS.EFUSE_CODING_SCHEME_MASK
         )
+        if coding_scheme == self.REGS.CODING_SCHEME_NONE_RECOVERY:
+            return self.REGS.CODING_SCHEME_NONE
+        else:
+            return coding_scheme
 
     def write_raw_coding_scheme(self, value):
         self.write_efuse(

@@ -41,7 +41,7 @@ def segment_matches_section(segment, section):
 class BaseTestCase:
     @classmethod
     def setup_class(self):
-        # Save the current working directory to be resotred later
+        # Save the current working directory to be restored later
         self.stored_dir = os.getcwd()
         os.chdir(TEST_DIR)
 
@@ -326,8 +326,8 @@ class TestESP32Image(BaseTestCase):
         # this ELF will produce 8 segments in the bin
         image = self._test_elf2image(ELF, BIN)
         # Adjacent sections are now merged, len(image.segments) should
-        # equal 4 (instead of 8).
-        assert len(image.segments) == 4
+        # equal 5 (instead of 8).
+        assert len(image.segments) == 5
 
         # --use_segments uses ELF segments(phdrs), produces just 2 segments in the bin
         image = self._test_elf2image(ELF, BIN, ["--use_segments"])
@@ -415,7 +415,7 @@ class TestELFSHA256(BaseTestCase):
                     0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff},
     };
 
-    This leaves zeroes only for the fiels of SHA-256 and the test will fail
+    This leaves zeroes only for the fields of SHA-256 and the test will fail
     if the placement of zeroes are tested at the wrong place.
 
     00000000: e907 0020 780f 0840 ee00 0000 0000 0000  ... x..@........

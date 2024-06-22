@@ -5,6 +5,7 @@
 
 import struct
 import time
+from typing import Dict
 
 from .esp32c3 import ESP32C3ROM
 from ..loader import ESPLoader
@@ -63,6 +64,8 @@ class ESP32C2ROM(ESP32C3ROM):
     ]
 
     UF2_FAMILY_ID = 0x2B88D29C
+
+    KEY_PURPOSES: Dict[int, str] = {}
 
     def get_pkg_version(self):
         num_word = 1
@@ -146,7 +149,7 @@ class ESP32C2ROM(ESP32C3ROM):
             # When chip has not generated AES/encryption key in BLOCK3,
             # the contents will be readable and 0.
             # If the flash encryption is enabled it is expected to have a valid
-            # non-zero key. We break out on first occurance of non-zero value
+            # non-zero key. We break out on first occurrence of non-zero value
             key_word = [0] * 7 if key_len_256 else [0] * 3
             for i in range(len(key_word)):
                 key_word[i] = self.read_reg(self.EFUSE_BLOCK_KEY0_REG + i * 4)

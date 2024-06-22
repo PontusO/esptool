@@ -1,4 +1,4 @@
-{IDF_TARGET_BOOTLOADER_OFFSET:default="0x0", esp32="0x1000", esp32s2="0x1000"}
+{IDF_TARGET_BOOTLOADER_OFFSET:default="0x0", esp32="0x1000", esp32s2="0x1000", esp32p4="0x2000"}
 
 .. _advanced-commands:
 
@@ -94,7 +94,7 @@ The ``--bytes`` argument determines how many status register bytes are read.
 
 .. note::
 
-    Not all flash chips support all of these comands. Consult the specific flash chip datasheet for details.
+    Not all flash chips support all of these commands. Consult the specific flash chip datasheet for details.
 
 .. _write-flash-status:
 

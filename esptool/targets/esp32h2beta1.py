@@ -4,9 +4,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import struct
+from typing import Dict
 
 from .esp32c3 import ESP32C3ROM
 from ..util import FatalError, NotImplementedInROMError
+
+from typing import List
 
 
 class ESP32H2BETA1ROM(ESP32C3ROM):
@@ -66,13 +69,28 @@ class ESP32H2BETA1ROM(ESP32C3ROM):
 
     FLASH_ENCRYPTED_WRITE_ALIGN = 16
 
-    MEMORY_MAP = []
+    MEMORY_MAP: List = []
 
     FLASH_FREQUENCY = {
         "48m": 0xF,
         "24m": 0x0,
         "16m": 0x1,
         "12m": 0x2,
+    }
+
+    EFUSE_MAX_KEY = 5
+    KEY_PURPOSES: Dict[int, str] = {
+        0: "USER/EMPTY",
+        1: "ECDSA_KEY",
+        2: "RESERVED",
+        4: "XTS_AES_128_KEY",
+        5: "HMAC_DOWN_ALL",
+        6: "HMAC_DOWN_JTAG",
+        7: "HMAC_DOWN_DIGITAL_SIGNATURE",
+        8: "HMAC_UP",
+        9: "SECURE_BOOT_DIGEST0",
+        10: "SECURE_BOOT_DIGEST1",
+        11: "SECURE_BOOT_DIGEST2",
     }
 
     def get_pkg_version(self):
@@ -119,8 +137,10 @@ class ESP32H2BETA1ROM(ESP32C3ROM):
         return None  # doesn't exist on ESP32-H2
 
     def get_key_block_purpose(self, key_block):
-        if key_block < 0 or key_block > 5:
-            raise FatalError("Valid key block numbers must be in range 0-5")
+        if key_block < 0 or key_block > self.EFUSE_MAX_KEY:
+            raise FatalError(
+                f"Valid key block numbers must be in range 0-{self.EFUSE_MAX_KEY}"
+            )
 
         reg, shift = [
             (self.EFUSE_PURPOSE_KEY0_REG, self.EFUSE_PURPOSE_KEY0_SHIFT),
@@ -134,7 +154,9 @@ class ESP32H2BETA1ROM(ESP32C3ROM):
 
     def is_flash_encryption_key_valid(self):
         # Need to see an AES-128 key
-        purposes = [self.get_key_block_purpose(b) for b in range(6)]
+        purposes = [
+            self.get_key_block_purpose(b) for b in range(self.EFUSE_MAX_KEY + 1)
+        ]
 
         return any(p == self.PURPOSE_VAL_XTS_AES128_KEY for p in purposes)
 

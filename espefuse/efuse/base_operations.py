@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import argparse
+import os
 import json
 import sys
 
@@ -65,15 +66,19 @@ def add_common_commands(subparsers, efuses):
     )
     burn.add_argument(
         "name_value_pairs",
-        help="Name of efuse register and New value pairs to burn",
+        help="Name of efuse field and new value pairs to burn. EFUSE_NAME: "
+        "[{}].".format(", ".join([e.name for e in efuses.efuses])),
         action=ActionEfuseValuePair,
         nargs="+",
-        metavar="[EFUSE_NAME VALUE] [{} VALUE".format(
-            " VALUE] [".join([e.name for e in efuses.efuses])
-        ),
+        metavar="[EFUSE_NAME VALUE]",
         efuse_choices=[e.name for e in efuses.efuses]
         + [name for e in efuses.efuses for name in e.alt_names if name != ""],
         efuses=efuses,
+    )
+    burn.add_argument(
+        "--force",
+        help="Suppress an error to burn eFuses",
+        action="store_true",
     )
 
     read_protect_efuse = subparsers.add_parser(
@@ -169,12 +174,22 @@ def add_common_commands(subparsers, efuses):
         help="Display information about ADC calibration data stored in efuse.",
     )
 
-    dump_cmd = subparsers.add_parser("dump", help="Dump raw hex values of all efuses")
+    dump_cmd = subparsers.add_parser("dump", help="Dump raw hex values of all eFuses")
+    dump_cmd.add_argument(
+        "--format",
+        help="Select the dump format: "
+        "default - usual console eFuse dump; "
+        "united - all eFuse blocks are stored in one file; "
+        "separated - each eFuse block is placed in a separate file. Tool will create multiple files based on "
+        "the given --file_name (/path/blk.bin): blk0.bin, blk1.bin ... blkN.bin. Use the burn_block_data cmd "
+        "to write it back to another chip.",
+        choices=["default", "separated", "united"],
+        default="default",
+    )
     dump_cmd.add_argument(
         "--file_name",
-        help="Saves dump for each block into separate file. Provide the common "
-        "path name /path/blk.bin, it will create: blk0.bin, blk1.bin ... blkN.bin. "
-        "Use burn_block_data to write it back to another chip.",
+        help="The path to the file in which to save the dump, if not specified, output to the console.",
+        default=sys.stdout,
     )
 
     summary_cmd = subparsers.add_parser(
@@ -183,7 +198,7 @@ def add_common_commands(subparsers, efuses):
     summary_cmd.add_argument(
         "--format",
         help="Select the summary format",
-        choices=["summary", "json"],
+        choices=["summary", "json", "value_only"],
         default="summary",
     )
     summary_cmd.add_argument(
@@ -191,6 +206,11 @@ def add_common_commands(subparsers, efuses):
         help="File to save the efuse summary",
         type=argparse.FileType("w"),
         default=sys.stdout,
+    )
+    summary_cmd.add_argument(
+        "efuses_to_show",
+        help="The efuses to show. If not provided, all efuses will be shown.",
+        nargs="*",
     )
 
     execute_scripts = subparsers.add_parser(
@@ -246,14 +266,21 @@ def add_show_sensitive_info_option(p):
 
 
 def summary(esp, efuses, args):
-    """Print a human-readable summary of efuse contents"""
+    """Print a human-readable or json summary of efuse contents"""
     ROW_FORMAT = "%-50s %-50s%s = %s %s %s"
-    human_output = args.format == "summary"
+    human_output = args.format in ["summary", "value_only"]
+    value_only = args.format == "value_only"
+    if value_only and len(args.efuses_to_show) != 1:
+        raise esptool.FatalError(
+            "The 'value_only' format can be used exactly for one efuse."
+        )
+    do_filtering = bool(args.efuses_to_show)
     json_efuse = {}
+    summary_efuse = []
     if args.file != sys.stdout:
         print("Saving efuse values to " + args.file.name)
-    if human_output:
-        print(
+    if human_output and not value_only:
+        summary_efuse.append(
             ROW_FORMAT.replace("-50", "-12")
             % (
                 "EFUSE_NAME (Block)",
@@ -262,13 +289,12 @@ def summary(esp, efuses, args):
                 "[Meaningful Value]",
                 "[Readable/Writeable]",
                 "(Hex Value)",
-            ),
-            file=args.file,
+            )
         )
-        print("-" * 88, file=args.file)
+        summary_efuse.append("-" * 88)
     for category in sorted(set(e.category for e in efuses), key=lambda c: c.title()):
-        if human_output:
-            print("%s fuses:" % category.title(), file=args.file)
+        if human_output and not value_only:
+            summary_efuse.append(f"{category.title()} fuses:")
         for e in (e for e in efuses if e.category == category):
             if e.efuse_type.startswith("bytes"):
                 raw = ""
@@ -297,8 +323,12 @@ def summary(esp, efuses, args):
                     value = "".join(v)
                 else:
                     value = value.replace("0", "?")
-            if human_output:
-                print(
+            if (
+                human_output
+                and (not do_filtering or e.name in args.efuses_to_show)
+                and not value_only
+            ):
+                summary_efuse.append(
                     ROW_FORMAT
                     % (
                         e.get_info(),
@@ -307,18 +337,20 @@ def summary(esp, efuses, args):
                         value,
                         perms,
                         raw,
-                    ),
-                    file=args.file,
+                    )
                 )
                 desc_len = len(e.description[50:])
                 if desc_len:
                     desc_len += 50
                     for i in range(50, desc_len, 50):
-                        print(
-                            "%-50s %-50s" % ("", e.description[i : (50 + i)]),
-                            file=args.file,
+                        summary_efuse.append(
+                            f"{'':<50} {e.description[i : (50 + i)]:<50}"
                         )
-            if args.format == "json":
+            elif human_output and value_only and e.name in args.efuses_to_show:
+                summary_efuse.append(f"{value}")
+            elif args.format == "json" and (
+                not do_filtering or e.name in args.efuses_to_show
+            ):
                 json_efuse[e.name] = {
                     "name": e.name,
                     "value": base_value if readable else value,
@@ -332,42 +364,74 @@ def summary(esp, efuses, args):
                     "efuse_type": e.efuse_type,
                     "bit_len": e.bit_len,
                 }
-        if human_output:
-            print("", file=args.file)
-    if human_output:
-        print(efuses.summary(), file=args.file)
+        if human_output and not value_only:
+            # Remove empty category if efuses are filtered and there are none to show
+            if do_filtering and summary_efuse[-1] == f"{category.title()} fuses:":
+                summary_efuse.pop()
+            else:
+                summary_efuse.append("")
+    if human_output and not value_only:
+        summary_efuse.append(efuses.summary())
         warnings = efuses.get_coding_scheme_warnings()
         if warnings:
-            print(
-                "WARNING: Coding scheme has encoding bit error warnings", file=args.file
+            summary_efuse.append(
+                "WARNING: Coding scheme has encoding bit error warnings"
             )
+    if human_output:
+        for line in summary_efuse:
+            print(line, file=args.file)
         if args.file != sys.stdout:
             args.file.close()
             print("Done")
-    if args.format == "json":
+    elif args.format == "json":
         json.dump(json_efuse, args.file, sort_keys=True, indent=4)
         print("")
 
 
 def dump(esp, efuses, args):
     """Dump raw efuse data registers"""
-    # Using --debug option allows to print dump.
-    # Nothing to do here. The log will be printed
-    # during EspEfuses.__init__() in self.read_blocks()
-    if args.file_name:
-        # save dump to the file
+    dump_file = args.file_name
+    to_console = args.file_name == sys.stdout
+
+    def output_block_to_file(block, f, to_console):
+        block_dump = BitStream(block.get_bitstring())
+        block_dump.byteswap()
+        if to_console:
+            f.write(block_dump.hex + "\n")
+        else:
+            block_dump.tofile(f)
+
+    if args.format == "default":
+        if to_console:
+            # for "espefuse.py dump" cmd
+            for block in efuses.blocks:
+                block.print_block(block.get_bitstring(), "dump", debug=True)
+            return
+        else:
+            # for back compatibility to support "espefuse.py dump --file_name dump.bin"
+            args.format = "separated"
+
+    if args.format == "separated":
+        # each efuse block is placed in a separate file
         for block in efuses.blocks:
-            file_dump_name = args.file_name
-            place_for_index = file_dump_name.find(".bin")
-            file_dump_name = (
-                file_dump_name[:place_for_index]
-                + str(block.id)
-                + file_dump_name[place_for_index:]
-            )
-            print(file_dump_name)
-            with open(file_dump_name, "wb") as f:
-                block.get_bitstring().byteswap()
-                block.get_bitstring().tofile(f)
+            if not to_console:
+                file_dump_name = args.file_name
+                fname, fextension = os.path.splitext(file_dump_name)
+                file_dump_name = f"{fname}{block.id}{fextension}"
+                print(f"Dump efuse block{block.id} -> {file_dump_name}")
+                dump_file = open(file_dump_name, "wb")
+            output_block_to_file(block, dump_file, to_console)
+            if not to_console:
+                dump_file.close()
+    elif args.format == "united":
+        # all efuse blocks are stored in one file
+        if not to_console:
+            print(f"Dump efuse blocks -> {args.file_name}")
+            dump_file = open(args.file_name, "wb")
+        for block in efuses.blocks:
+            output_block_to_file(block, dump_file, to_console)
+        if not to_console:
+            dump_file.close()
 
 
 def burn_efuse(esp, efuses, args):
@@ -456,6 +520,14 @@ def burn_efuse(esp, efuses, args):
             "but after that connection to the chip will become impossible."
         )
         print("                        espefuse/esptool will not work.")
+
+    if efuses.is_efuses_incompatible_for_burn():
+        if args.force:
+            print("Ignore incompatible eFuse settings.")
+        else:
+            raise esptool.FatalError(
+                "Incompatible eFuse settings detected, abort. (use --force flag to skip it)."
+            )
 
     if not efuses.burn_all(check_batch_mode=True):
         return
@@ -684,7 +756,8 @@ def burn_bit(esp, efuses, args):
 
 
 def get_error_summary(efuses):
-    error_in_blocks = efuses.get_coding_scheme_warnings()
+    efuses.get_coding_scheme_warnings()
+    error_in_blocks = any(blk.fail or blk.num_errors != 0 for blk in efuses.blocks)
     if not error_in_blocks:
         return False
     writable = True
