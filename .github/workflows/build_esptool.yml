@@ -27,7 +27,7 @@ jobs:
           CONTAINER: python:3.8-bullseye
           TARGET: linux-arm32
           SEPARATOR: ':'
-          RUN_ON: [ARM, self-hosted, linux]
+          RUN_ON: [ARM, self-hosted, linux, docker]
         - platform: linux-arm64
           CONTAINER: python:3.8-bullseye
           TARGET: linux-arm64
@@ -56,7 +56,7 @@ jobs:
           pip install --user -e .
       - name: Build with PyInstaller
         run: |
-          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico --add-data="${{ env.STUBS_DIR }}*.json${{ matrix.SEPARATOR }}${{ env.STUBS_DIR }}" esptool.py
+          pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico --add-data="${{ env.STUBS_DIR }}1/*.json${{ matrix.SEPARATOR }}${{ env.STUBS_DIR }}1/" --add-data="${{ env.STUBS_DIR }}2/*.json${{ matrix.SEPARATOR }}${{ env.STUBS_DIR }}2/" esptool.py
           pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico --add-data="${{ env.EFUSE_DIR }}*.yaml${{ matrix.SEPARATOR }}${{ env.EFUSE_DIR }}" espefuse.py
           pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico espsecure.py
           pyinstaller --distpath ./${{ env.DISTPATH }} -F --icon=ci/espressif.ico esp_rfc2217_server.py
@@ -92,6 +92,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') && !(contains(github.ref_name, 'dev'))
     needs: build-esptool-binaries
     runs-on: ubuntu-latest
+    env:
+      PIP_EXTRA_INDEX_URL: "https://dl.espressif.com/pypi"
     permissions:
       contents: write
     steps:

@@ -8,7 +8,7 @@ from typing import Dict
 
 from .esp32c6 import ESP32C6ROM
 from ..loader import ESPLoader
-from ..reset import HardReset
+from ..util import FatalError
 
 
 class ESP32C5ROM(ESP32C6ROM):
@@ -16,6 +16,32 @@ class ESP32C5ROM(ESP32C6ROM):
     IMAGE_CHIP_ID = 23
 
     EFUSE_BASE = 0x600B4800
+    EFUSE_BLOCK1_ADDR = EFUSE_BASE + 0x044
+    MAC_EFUSE_REG = EFUSE_BASE + 0x044
+
+    EFUSE_RD_REG_BASE = EFUSE_BASE + 0x030  # BLOCK0 read base address
+
+    EFUSE_PURPOSE_KEY0_REG = EFUSE_BASE + 0x34
+    EFUSE_PURPOSE_KEY0_SHIFT = 24
+    EFUSE_PURPOSE_KEY1_REG = EFUSE_BASE + 0x34
+    EFUSE_PURPOSE_KEY1_SHIFT = 28
+    EFUSE_PURPOSE_KEY2_REG = EFUSE_BASE + 0x38
+    EFUSE_PURPOSE_KEY2_SHIFT = 0
+    EFUSE_PURPOSE_KEY3_REG = EFUSE_BASE + 0x38
+    EFUSE_PURPOSE_KEY3_SHIFT = 4
+    EFUSE_PURPOSE_KEY4_REG = EFUSE_BASE + 0x38
+    EFUSE_PURPOSE_KEY4_SHIFT = 8
+    EFUSE_PURPOSE_KEY5_REG = EFUSE_BASE + 0x38
+    EFUSE_PURPOSE_KEY5_SHIFT = 12
+
+    EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT_REG = EFUSE_RD_REG_BASE
+    EFUSE_DIS_DOWNLOAD_MANUAL_ENCRYPT = 1 << 20
+
+    EFUSE_SPI_BOOT_CRYPT_CNT_REG = EFUSE_BASE + 0x034
+    EFUSE_SPI_BOOT_CRYPT_CNT_MASK = 0x7 << 18
+
+    EFUSE_SECURE_BOOT_EN_REG = EFUSE_BASE + 0x038
+    EFUSE_SECURE_BOOT_EN_MASK = 1 << 20
 
     IROM_MAP_START = 0x42000000
     IROM_MAP_END = 0x42800000
@@ -29,7 +55,7 @@ class ESP32C5ROM(ESP32C6ROM):
     UARTDEV_BUF_NO = 0x4085F51C  # Variable in ROM .bss which indicates the port in use
 
     # Magic value for ESP32C5
-    CHIP_DETECT_MAGIC_VALUE = [0x8082C5DC]
+    CHIP_DETECT_MAGIC_VALUE = [0x1101406F]
 
     FLASH_FREQUENCY = {
         "80m": 0xF,
@@ -70,6 +96,18 @@ class ESP32C5ROM(ESP32C6ROM):
         12: "KM_INIT_KEY",
     }
 
+    def get_pkg_version(self):
+        num_word = 2
+        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 26) & 0x07
+
+    def get_minor_chip_version(self):
+        num_word = 2
+        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 0) & 0x0F
+
+    def get_major_chip_version(self):
+        num_word = 2
+        return (self.read_reg(self.EFUSE_BLOCK1_ADDR + (4 * num_word)) >> 4) & 0x03
+
     def get_chip_description(self):
         chip_name = {
             0: "ESP32-C5",
@@ -89,8 +127,7 @@ class ESP32C5ROM(ESP32C6ROM):
         ) >> self.PCR_SYSCLK_XTAL_FREQ_S
 
     def hard_reset(self):
-        print("Hard resetting via RTS pin...")
-        HardReset(self._port, self.uses_usb_jtag_serial())()
+        ESPLoader.hard_reset(self, self.uses_usb_jtag_serial())
 
     def change_baud(self, baud):
         if not self.IS_STUB:
@@ -119,5 +156,33 @@ class ESP32C5ROM(ESP32C6ROM):
         else:
             ESPLoader.change_baud(self, baud)
 
+    def check_spi_connection(self, spi_connection):
+        if not set(spi_connection).issubset(set(range(0, 29))):
+            raise FatalError("SPI Pin numbers must be in the range 0-28.")
+        if any([v for v in spi_connection if v in [13, 14]]):
+            print(
+                "WARNING: GPIO pins 13 and 14 are used by USB-Serial/JTAG, "
+                "consider using other pins for SPI flash connection."
+            )
 
-# TODO: [ESP32C5] ESPTOOL-825, IDF-8631 support stub flasher
+
+class ESP32C5StubLoader(ESP32C5ROM):
+    """Access class for ESP32C5 stub loader, runs on top of ROM.
+
+    (Basically the same as ESP32StubLoader, but different base class.
+    Can possibly be made into a mixin.)
+    """
+
+    FLASH_WRITE_SIZE = 0x4000  # matches MAX_WRITE_BLOCK in stub_loader.c
+    STATUS_BYTES_LENGTH = 2  # same as ESP8266, different to ESP32 ROM
+    IS_STUB = True
+
+    def __init__(self, rom_loader):
+        self.secure_download_mode = rom_loader.secure_download_mode
+        self._port = rom_loader._port
+        self._trace_enabled = rom_loader._trace_enabled
+        self.cache = rom_loader.cache
+        self.flush_input()  # resets _slip_reader
+
+
+ESP32C5ROM.STUB_CLASS = ESP32C5StubLoader

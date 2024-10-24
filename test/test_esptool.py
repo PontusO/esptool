@@ -12,6 +12,13 @@
 #        - --chip       - ESP chip name
 #        - --baud       - baud rate
 #        - --with-trace - trace all interactions (True or False)
+#
+# To run the tests in USB-OTG mode, ground the boot mode straping pin
+# and set ESPTOOL_TEST_USB_OTG environment variable to any value.
+#
+# To run the tests in USB-Serial/JTAG mode, set both --port and --preload-port
+# options. The --preload-port needs to be connected to a USB-to-UART bridge,
+# while --port needs to be connected to the USB-Serial/JTAG peripheral.
 
 import os
 import os.path
@@ -21,7 +28,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
 from socket import AF_INET, SOCK_STREAM, socket
 from time import sleep
 from typing import List
@@ -50,9 +56,6 @@ import serial
 
 
 TEST_DIR = os.path.abspath(os.path.dirname(__file__))
-
-# esptool.py skips strapping mode check in USB-CDC case if this is set
-os.environ["ESPTOOL_TESTING"] = "1"
 
 print("Running esptool.py tests...")
 
@@ -177,14 +180,27 @@ class EsptoolTestCase:
         if baud or arg_baud is not None:
             base_cmd += ["--baud", str(baud or arg_baud)]
         usb_jtag_serial_reset = ["--before", "usb_reset"] if arg_preload_port else []
-        full_cmd = base_cmd + usb_jtag_serial_reset + args.split(" ")
+        usb_otg_dont_reset = (
+            ["--after", "no_reset_stub"] if "ESPTOOL_TEST_USB_OTG" in os.environ else []
+        )
+        full_cmd = (
+            base_cmd + usb_jtag_serial_reset + usb_otg_dont_reset + args.split(" ")
+        )
 
         # Preload a dummy binary to disable the RTC watchdog, needed in USB-JTAG/Serial
         if (
             preload
             and arg_preload_port
             and arg_chip
-            in ["esp32c3", "esp32s3", "esp32c6", "esp32h2", "esp32p4"]  # With U-JS
+            in [
+                "esp32c3",
+                "esp32s3",
+                "esp32c6",
+                "esp32h2",
+                "esp32p4",
+                "esp32c5",
+                "esp32c61",
+            ]  # With U-JS
         ):
             port_index = base_cmd.index("--port") + 1
             base_cmd[port_index] = arg_preload_port  # Set the port to the preload one
@@ -196,12 +212,16 @@ class EsptoolTestCase:
             print("\nPreloading dummy binary to disable RTC watchdog...")
             run_esptool_process(preload_cmd)
             print("Dummy binary preloaded successfully.")
-            time.sleep(0.3)  # Wait for the app to run and port to appear
+            sleep(0.3)  # Wait for the app to run and port to appear
 
         # Run the command
         print(f'\nRunning the "{args}" command...')
         output = run_esptool_process(full_cmd)
         print(output)  # for more complete stdout logs on failure
+
+        if "ESPTOOL_TEST_USB_OTG" in os.environ:
+            sleep(0.5)  # Wait for the port to enumerate between tests
+
         return output
 
     def run_esptool_error(self, args, baud=None, chip=None):
@@ -275,6 +295,20 @@ class EsptoolTestCase:
             rb = rb[8:]
             ct = ct[8:]
         self.diff(rb, ct)
+
+    def verify_output(self, expected_out: List[bytes]):
+        """Verify that at least one element of expected_out is in serial output"""
+        # Setting rtscts to true enables hardware flow control.
+        # This removes unwanted RTS logic level changes for some machines
+        # (and, therefore, chip resets)
+        # when the port is opened by the following function.
+        # As a result, if an app loaded to RAM, it has a chance to run and send
+        # "Hello world" data without unwanted chip reset.
+        with serial.serial_for_url(arg_port, arg_baud, rtscts=True) as p:
+            p.timeout = 5
+            output = p.read(100)
+            print(f"Output: {output}")
+            assert any(item in output for item in expected_out)
 
 
 @pytest.mark.skipif(arg_chip != "esp32", reason="ESP32 only")
@@ -478,7 +512,7 @@ class TestFlashing(EsptoolTestCase):
     def test_correct_offset(self):
         """Verify writing at an offset actually writes to that offset."""
         self.run_esptool("write_flash 0x2000 images/sector.bin")
-        time.sleep(0.1)
+        sleep(0.1)
         three_sectors = self.readback(0, 0x3000)
         last_sector = three_sectors[0x2000:]
         with open("images/sector.bin", "rb") as f:
@@ -660,6 +694,100 @@ class TestFlashing(EsptoolTestCase):
         assert "Chip erase completed successfully" in output
         assert "Hash of data verified" in output
 
+    @pytest.mark.quick_test
+    def test_flash_not_aligned_nostub(self):
+        output = self.run_esptool("--no-stub write_flash 0x1 images/one_kb.bin")
+        assert (
+            "WARNING: Flash address 0x00000001 is not aligned to a 0x1000 byte flash sector. 0x1 bytes before this address will be erased."
+            in output
+        )
+        if "ESPTOOL_TEST_USB_OTG" not in os.environ:
+            assert "Hard resetting" in output
+
+    @pytest.mark.skipif(arg_preload_port is False, reason="USB-JTAG/Serial only")
+    @pytest.mark.skipif(arg_chip != "esp32c3", reason="ESP32-C3 only")
+    def test_flash_overclocked(self):
+        SYSTEM_BASE_REG = 0x600C0000
+        SYSTEM_CPU_PER_CONF_REG = SYSTEM_BASE_REG + 0x008
+        SYSTEM_CPUPERIOD_SEL_S = 0
+        SYSTEM_CPUPERIOD_MAX = 1  # CPU_CLK frequency is 160 MHz
+
+        SYSTEM_SYSCLK_CONF_REG = SYSTEM_BASE_REG + 0x058
+        SYSTEM_SOC_CLK_SEL_S = 10
+        SYSTEM_SOC_CLK_MAX = 1
+
+        output = self.run_esptool(
+            "--after no_reset_stub write_flash 0x0 images/one_mb.bin", preload=False
+        )
+        faster = re.search(r"(\d+(\.\d+)?)\s+seconds", output)
+        assert faster, "Duration summary not found in the output"
+
+        with esptool.cmds.detect_chip(
+            port=arg_port, connect_mode="no_reset"
+        ) as reg_mod:
+            reg_mod.write_reg(
+                SYSTEM_SYSCLK_CONF_REG,
+                0,
+                mask=(SYSTEM_SOC_CLK_MAX << SYSTEM_SOC_CLK_SEL_S),
+            )
+            sleep(0.1)
+            reg_mod.write_reg(
+                SYSTEM_CPU_PER_CONF_REG,
+                0,
+                mask=(SYSTEM_CPUPERIOD_MAX << SYSTEM_CPUPERIOD_SEL_S),
+            )
+
+        output = self.run_esptool(
+            "--before no_reset write_flash 0x0 images/one_mb.bin", preload=False
+        )
+        slower = re.search(r"(\d+(\.\d+)?)\s+seconds", output)
+        assert slower, "Duration summary not found in the output"
+        assert (
+            float(slower.group(1)) - float(faster.group(1)) > 1
+        ), "Overclocking failed"
+
+    @pytest.mark.skipif(arg_preload_port is False, reason="USB-JTAG/Serial only")
+    @pytest.mark.skipif(arg_chip != "esp32c3", reason="ESP32-C3 only")
+    def test_flash_watchdogs(self):
+        RTC_WDT_ENABLE = 0xC927FA00  # Valid only for ESP32-C3
+
+        with esptool.cmds.detect_chip(port=arg_port) as reg_mod:
+            # Enable RTC WDT
+            reg_mod.write_reg(
+                reg_mod.RTC_CNTL_WDTWPROTECT_REG, reg_mod.RTC_CNTL_WDT_WKEY
+            )
+            reg_mod.write_reg(reg_mod.RTC_CNTL_WDTCONFIG0_REG, RTC_WDT_ENABLE)
+            reg_mod.write_reg(reg_mod.RTC_CNTL_WDTWPROTECT_REG, 0)
+
+            # Disable automatic feeding of SWD
+            reg_mod.write_reg(
+                reg_mod.RTC_CNTL_SWD_WPROTECT_REG, reg_mod.RTC_CNTL_SWD_WKEY
+            )
+            reg_mod.write_reg(
+                reg_mod.RTC_CNTL_SWD_CONF_REG, 0, mask=reg_mod.RTC_CNTL_SWD_AUTO_FEED_EN
+            )
+            reg_mod.write_reg(reg_mod.RTC_CNTL_SWD_WPROTECT_REG, 0)
+
+            reg_mod.sync_stub_detected = False
+            reg_mod.run_stub()
+
+        output = self.run_esptool(
+            "--before no_reset --after no_reset_stub flash_id", preload=False
+        )
+        assert "Stub is already running. No upload is necessary." in output
+
+        sleep(10)  # Wait if RTC WDT triggers
+
+        with esptool.cmds.detect_chip(
+            port=arg_port, connect_mode="no_reset"
+        ) as reg_mod:
+            output = reg_mod.read_reg(reg_mod.RTC_CNTL_WDTCONFIG0_REG)
+            assert output == 0, "RTC WDT is not disabled"
+
+            output = reg_mod.read_reg(reg_mod.RTC_CNTL_SWD_CONF_REG)
+            print(f"RTC_CNTL_SWD_CONF_REG: {output}")
+            assert output & 0x80000000, "SWD auto feeding is not disabled"
+
 
 @pytest.mark.skipif(
     arg_chip in ["esp8266", "esp32"],
@@ -824,6 +952,14 @@ class TestFlashDetection(EsptoolTestCase):
         for line in lines:
             assert "embedded flash" not in line.lower()
 
+    @pytest.mark.quick_test
+    def test_flash_sfdp(self):
+        """Test manufacturer and device response of flash detection."""
+        res = self.run_esptool("read_flash_sfdp 0 4")
+        assert "SFDP[0..3]: 53 46 44 50" in res
+        res = self.run_esptool("read_flash_sfdp 1 3")
+        assert "SFDP[1..3]: 46 44 50 " in res
+
 
 @pytest.mark.skipif(
     os.getenv("ESPTOOL_TEST_SPI_CONN") is None, reason="Needs external flash"
@@ -870,6 +1006,10 @@ class TestExternalFlash(EsptoolTestCase):
         self.verify_readback(0, 1024, "images/one_kb.bin", spi_connection=self.conn)
 
 
+@pytest.mark.skipif(
+    "ESPTOOL_TEST_USB_OTG" in os.environ,
+    reason="USB-OTG tests require --after no_reset for stability.",
+)
 class TestStubReuse(EsptoolTestCase):
     def test_stub_reuse_with_synchronization(self):
         """Keep the flasher stub running and reuse it the next time."""
@@ -1148,7 +1288,7 @@ class TestDeepSleepFlash(EsptoolTestCase):
         # (so GPIO16, etc, config is not important for this test)
         self.run_esptool("write_flash 0x0 images/esp8266_deepsleep.bin", baud=230400)
 
-        time.sleep(0.25)  # give ESP8266 time to enter deep sleep
+        sleep(0.25)  # give ESP8266 time to enter deep sleep
 
         self.run_esptool("write_flash 0x0 images/fifty_kb.bin", baud=230400)
         self.verify_readback(0, 50 * 1024, "images/fifty_kb.bin")
@@ -1261,8 +1401,15 @@ class TestReadWriteMemory(EsptoolTestCase):
         ]:  # find a probably-unused memory type
             region = esp.get_memory_region(test_region)
             if region:
-                # Write at the end of DRAM on ESP32-C2 to avoid overwriting the stub
-                test_addr = region[1] - 8 if arg_chip == "esp32c2" else region[0]
+                if arg_chip == "esp32c61":
+                    # Write into the "BYTE_ACCESSIBLE" space and after the stub
+                    region = esp.get_memory_region("DRAM")
+                    test_addr = region[1] - 0x2FFFF
+                elif arg_chip == "esp32c2":
+                    # Write at the end of DRAM on ESP32-C2 to avoid overwriting the stub
+                    test_addr = region[1] - 8
+                else:
+                    test_addr = region[0]
                 break
 
         print(f"Using test address {test_addr:#x}")
@@ -1373,6 +1520,31 @@ class TestMakeImage(EsptoolTestCase):
             )
         finally:
             os.remove("test0x00000.bin")
+
+
+@pytest.mark.skipif(
+    arg_chip in ["esp8266", "esp32", "esp32h2"], reason="Not supported on this chip"
+)
+@pytest.mark.skipif(
+    "ESPTOOL_TEST_USB_OTG" in os.environ or arg_preload_port is not False,
+    reason="Boot mode strapping pin pulled constantly low, can't reset out of bootloader",
+)
+class TestReset(EsptoolTestCase):
+    def test_rtc_wdt_reset(self):
+        # Erase the bootloader to get "invalid header" output + test RTC WDT reset
+        res = self.run_esptool("--after no_reset erase_region 0x0 0x4000")
+        assert "Erase completed" in res
+        try:
+            esp = esptool.get_default_connected_device(
+                [arg_port], arg_port, 10, 115200, arg_chip
+            )
+            esp.rtc_wdt_reset()
+        finally:
+            esp._port.close()
+        sleep(0.2)  # Give the chip time to reset
+        # If there is no output, the chip did not reset
+        # Mangled bytes are for C2 26 MHz when the baudrate doesn't match
+        self.verify_output([b"invalid header", b"\x02b\xe2n\x9e\xe0p\x12n\x9c\x0cn"])
 
 
 @pytest.mark.skipif(arg_chip != "esp32", reason="Don't need to test multiple times")
@@ -1488,4 +1660,21 @@ class TestConfigFile(EsptoolTestCase):
         with self.ConfigFile(config_file_path, invalid_reset_seq_config):
             output = self.run_esptool_error("flash_id")
             assert f"Loaded custom configuration from {config_file_path}" in output
-            assert 'Invalid "custom_reset_sequence" option format:' in output
+            assert "Invalid custom reset sequence option format:" in output
+
+    def test_open_port_attempts(self):
+        # Test that the open_port_attempts option is loaded correctly
+        connect_attempts = 5
+        config = (
+            "[esptool]\n"
+            f"open_port_attempts = {connect_attempts}\n"
+            "connect_attempts = 1\n"
+            "custom_reset_sequence = D0\n"  # Invalid reset sequence to make sure connection fails
+        )
+        config_file_path = os.path.join(os.getcwd(), "esptool.cfg")
+        with self.ConfigFile(config_file_path, config):
+            output = self.run_esptool_error("flash_id")
+            assert f"Loaded custom configuration from {config_file_path}" in output
+            assert "Retrying failed connection" in output
+            for _ in range(connect_attempts):
+                assert "Connecting........" in output

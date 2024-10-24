@@ -22,6 +22,8 @@ include:
       file: danger.yaml
 run-danger-mr-linter:
     stage: pre-check
+    tags:
+      - dangerjs
     variables:
       ENABLE_CHECK_UPDATED_CHANGELOG: 'false'
 
@@ -33,19 +35,6 @@ variables:
 cache:
   paths:
     - "$CI_PROJECT_DIR/.cache/pip"
-
-.use_esp_flasher_stub: &use_esp_flasher_stub |
-  if [[ "$CI_USE_ESP_FLASHER_STUB" = "1" ]]
-  then
-    apt-get update && apt-get install -y jq
-    wget https://api.github.com/repos/esp-rs/esp-flasher-stub/releases/latest -O /tmp/esp_flasher_stub.json
-    echo "esp-flasher-stub version:"; cat /tmp/esp_flasher_stub.json | jq -r .tag_name
-    mkdir /tmp/assets
-    cat /tmp/esp_flasher_stub.json | jq -r .assets[].browser_download_url | while read -r url; do wget $url -P /tmp/assets; done
-    for f in /tmp/assets/*.json; do fname=$(basename $f); cp $f esptool/targets/stub_flasher/stub_flasher_${fname#esp}; done
-    echo "These are the changes in the repository:"
-    git diff --stat
-  fi
 
 .test_template: &test_template
   stage: test
@@ -73,7 +62,7 @@ version_check:
 .host_tests_template: &host_tests_template
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   artifacts:
     when: always
     paths:
@@ -136,7 +125,7 @@ host_tests_espefuse:
 
 host_tests_latest_python:
   <<: *host_tests_template
-  image: python:3.12-bullseye
+  image: python:3.13-bullseye
   variables:
     PYTEST_ADDOPTS: "-sv --junitxml=test/report.xml --color=yes"
   script:
@@ -170,7 +159,7 @@ run_pre_commit_hooks:
   stage: test
   image: python:3.7-bullseye
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   tags:
     - host_test
   script:
@@ -192,7 +181,7 @@ run_pre_commit_hooks:
 check_install_coverage:
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   artifacts:
     when: always
     paths:
@@ -210,7 +199,7 @@ check_install_coverage:
 check_install:
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   before_script:
     - pip install .
   script:
@@ -220,7 +209,7 @@ check_install:
 check_install_editable:
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   before_script:
     - pip install -e .
   script:
@@ -230,7 +219,7 @@ check_install_editable:
 check_install_system:
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   before_script:
     - pip install --user .
   script:
@@ -245,7 +234,7 @@ check_install_system:
 check_install_venv:
   <<: *test_template
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   before_script:
     - python -m venv test_env
     - source test_env/bin/activate
@@ -253,33 +242,11 @@ check_install_venv:
   script:
     - *run_esptool
 
-# Check the stub can build and that a stub built in CI has the same contents
-# as the one embedded in esptool
 check_stub_build:
   <<: *test_template
-  rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
-  artifacts:
-    when: always
-    paths:
-      - flasher_stub/build/
-      - "**/.coverage*"
-      - ".coverage*"
-    expire_in: 1 week
-  variables:
-    TOOLCHAIN_DIR: "/root/.espressif/dist"
-
-    ESP8266_BINDIR: "${TOOLCHAIN_DIR}/xtensa-lx106-elf/bin"
-    ESP32_BINDIR: "${TOOLCHAIN_DIR}/xtensa-esp32-elf/bin"
-    ESP32S2_BINDIR: "${TOOLCHAIN_DIR}/xtensa-esp32s2-elf/bin"
-    ESP32S3_BINDIR: "${TOOLCHAIN_DIR}/xtensa-esp32s3-elf/bin"
-    ESP32C3_BINDIR: "${TOOLCHAIN_DIR}/riscv32-esp-elf/bin"
-
-    TOOLCHAIN_PATHS: "${ESP8266_BINDIR}:${ESP32_BINDIR}:${ESP32S2_BINDIR}:${ESP32S3_BINDIR}:${ESP32C3_BINDIR}"
   script:
-    - ./ci/setup_ci_build_env.sh
-    - make -C flasher_stub V=1 PATH="${TOOLCHAIN_PATHS}:${PATH}"
-    - cd flasher_stub && coverage run --parallel-mode ./compare_stubs.py
+    - ./ci/download_flasher_stubs.py
+    - git diff --exit-code
 
 .target_esptool_test:
   stage: test
@@ -292,7 +259,6 @@ check_stub_build:
     - pip install -e .[dev] --prefer-binary
     # libffi (needed for espsecure) version keeps changing in python docker images. Add a symlink to the installed version on Raspberry Pi
     - if [ $(uname -m) = "armv7l" ]; then ln -sfn /usr/lib/arm-linux-gnueabihf/libffi.so.7.1.0 /usr/lib/arm-linux-gnueabihf/libffi.so.6; fi
-    - *use_esp_flasher_stub
   artifacts:
     reports:
       junit: test/report.xml
@@ -331,6 +297,8 @@ target_esp32s2_usbcdc:
   extends: .target_esptool_test
   tags:
     - esptool_esp32s2_cdc_target
+  variables:
+    ESPTOOL_TEST_USB_OTG: "1"
   script:
     - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32S2_USBCDC --chip esp32s2 --baud 115200
 
@@ -381,6 +349,8 @@ target_esp32s3_usbcdc:
   extends: .target_esptool_test
   tags:
     - esptool_esp32s3_cdc_target
+  variables:
+    ESPTOOL_TEST_USB_OTG: "1"
   script:
     - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32S3_USBCDC --chip esp32s3 --baud 115200
 
@@ -453,6 +423,22 @@ target_esp32p4:
   script:
     - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32P4 --chip esp32p4 --baud 115200
 
+# ESP32C5
+target_esp32c5:
+  extends: .target_esptool_test
+  tags:
+    - esptool_esp32c5_target
+  script:
+    - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32C5 --chip esp32c5 --baud 115200
+
+# ESP32C61
+target_esp32c61:
+  extends: .target_esptool_test
+  tags:
+    - esptool_esp32c61_target
+  script:
+    - coverage run --parallel-mode -m pytest ${CI_PROJECT_DIR}/test/test_esptool.py --port /dev/serial_ports/ESP32C61 --chip esp32c61 --baud 115200
+
 .windows_test:
   stage: test
   variables:
@@ -460,7 +446,7 @@ target_esp32p4:
     PYTHONPATH: "$PYTHONPATH:${CI_PROJECT_DIR}/test"
     COVERAGE_PROCESS_START: "${CI_PROJECT_DIR}/test/.covconf"
   rules:
-    - if: $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_PIPELINE_SOURCE != "schedule"
   before_script:
     - pip install -e .[dev] --prefer-binary
   artifacts:
@@ -526,7 +512,7 @@ build_docs:
   tags:
     - build_docs
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_USE_ESP_FLASHER_STUB == "1"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
     - changes:
       - "docs/**/*"
@@ -541,7 +527,7 @@ build_docs:
   script:
     - cd docs
     - pip install -r requirements.txt --prefer-binary
-    - build-docs -l en -t {esp8266,esp32,esp32s2,esp32c3,esp32s3,esp32c2,esp32c6,esp32h2,esp32p4}
+    - build-docs -l en -t {esp8266,esp32,esp32s2,esp32c3,esp32s3,esp32c2,esp32c6,esp32h2,esp32p4,esp32c5,esp32c61}
 
 .deploy_docs_template:
   stage: deploy_docs
@@ -561,7 +547,7 @@ deploy_docs_preview:
   extends:
     - .deploy_docs_template
   rules:
-    - if: $CI_COMMIT_REF_NAME == "master" || ($CI_PIPELINE_SOURCE == "schedule" && $CI_USE_ESP_FLASHER_STUB == "1")
+    - if: $CI_COMMIT_REF_NAME == "master" || $CI_PIPELINE_SOURCE == "schedule"
       when: never
     - changes:
       - "docs/**/*"
@@ -569,17 +555,17 @@ deploy_docs_preview:
   variables:
     TYPE: "preview"
     DOCS_BUILD_DIR: "${CI_PROJECT_DIR}/docs/_build/"
-    DOCS_DEPLOY_PRIVATEKEY: "$DOCS_DEPLOY_KEY"
-    DOCS_DEPLOY_SERVER: "$DOCS_SERVER"
-    DOCS_DEPLOY_SERVER_USER: "$DOCS_SERVER_USER"
-    DOCS_DEPLOY_PATH: "$DOCS_PATH"
-    DOCS_DEPLOY_URL_BASE: "https://$DOCS_PREVIEW_SERVER_URL/docs/esptool"
+    DOCS_DEPLOY_PRIVATEKEY: "$DOCS_PREVIEW_DEPLOY_KEY"
+    DOCS_DEPLOY_SERVER: "$DOCS_PREVIEW_SERVER"
+    DOCS_DEPLOY_SERVER_USER: "$DOCS_PREVIEW_SERVER_USER"
+    DOCS_DEPLOY_PATH: "$DOCS_PREVIEW_PATH"
+    DOCS_DEPLOY_URL_BASE: "$DOCS_PREVIEW_URL_BASE"
 
 deploy_docs_production:
   extends:
     - .deploy_docs_template
   rules:
-    - if: $CI_COMMIT_REF_NAME == "master" && $CI_USE_ESP_FLASHER_STUB != "1"
+    - if: $CI_COMMIT_REF_NAME == "master" && $CI_PIPELINE_SOURCE != "schedule"
       changes:
       - "docs/**/*"
       - "CONTRIBUTING.rst"

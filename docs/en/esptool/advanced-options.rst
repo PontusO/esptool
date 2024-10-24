@@ -22,7 +22,7 @@ The ``--before`` argument allows you to specify whether the chip needs resetting
     * ``--before default_reset`` is the default, which uses DTR & RTS serial control lines (see :ref:`entering-the-bootloader`) to try to reset the chip into bootloader mode.
     * ``--before no_reset`` will skip DTR/RTS control signal assignments and just start sending a serial synchronisation command to the chip. This is useful if your chip doesn't have DTR/RTS, or for some serial interfaces (like Arduino board onboard serial) which behave differently when DTR/RTS are toggled.
     * ``--before no_reset_no_sync`` will skip DTR/RTS control signal assignments and skip also the serial synchronization command. This is useful if your chip is already running the :ref:`stub bootloader <stub>` and you want to avoid resetting the chip and uploading the stub again.
-    :esp32c3 or esp32s3 or esp32c6 or esp32h2 or esp32p4: * ``--before usb_reset`` will use custom reset sequence for USB-JTAG-Serial (used for example for ESP chips connected through the USB-JTAG-Serial peripheral). Usually, this option doesn't have to be used directly. Esptool should be able to detect connection through USB-JTAG-Serial.
+    :esp32c3 or esp32s3 or esp32c6 or esp32h2 or esp32p4 or esp32c5 or esp32c61: * ``--before usb_reset`` will use custom reset sequence for USB-JTAG-Serial (used for example for ESP chips connected through the USB-JTAG-Serial peripheral). Usually, this option doesn't have to be used directly. Esptool should be able to detect connection through USB-JTAG-Serial.
 
 Reset After Operation
 ^^^^^^^^^^^^^^^^^^^^^
@@ -31,10 +31,31 @@ The ``--after`` argument allows you to specify whether the chip should be reset 
 
 .. list::
 
-    * ``--after hard_reset`` is the default. The DTR serial control line is used to reset the chip into a normal boot sequence.
-    :esp8266:* ``--after soft_reset`` This runs the user firmware, but any subsequent reset will return to the serial bootloader. This was the reset behaviour in esptool v1.x.
+    * ``--after hard_reset`` is the default. The RTS serial control line is used to reset the chip into a normal boot sequence.
+    :esp8266: * ``--after soft_reset`` runs the user firmware, but any subsequent reset will return to the serial bootloader. This was the reset behaviour in esptool v1.x.
     * ``--after no_reset`` leaves the chip in the serial bootloader, no reset is performed.
     * ``--after no_reset_stub`` leaves the chip in the stub bootloader, no reset is performed.
+
+
+Connect Loop
+------------
+
+Esptool supports connection loops, where the user can specify how many times to try to open a port. The delay between retries is 0.1 seconds. This can be useful for example when the chip is in deep sleep or esptool was started before the chip was connected to the PC. A connection loop can be created by setting the ``ESPTOOL_OPEN_PORT_ATTEMPTS`` environment variable.
+This feature can also be enabled by using the ``open_port_attempts`` configuration option, for more details regarding config options see :ref:`Configuration file <config>` section.
+There are 3 possible values for this option:
+
+.. list::
+
+    * ``0`` will keep trying to connect to the chip indefinitely
+    * ``1`` will try to connect to the chip only once (default)
+    * ``N`` will try to connect to the chip N times
+
+
+.. note::
+
+    This option is only available if both the ``--port`` and ``--chip`` arguments are set.
+
+
 
 .. _disable_stub:
 
@@ -50,14 +71,18 @@ Passing ``--no-stub`` will disable certain options, as not all options are imple
     Overriding SPI Flash Connections
     --------------------------------
 
-    The optional ``--spi-connection`` argument overrides the SPI flash connection configuration on ESP32. This means that the SPI flash can be connected to other pins, or esptool can be used to communicate with a different SPI flash chip to the default.
+    The optional ``--spi-connection`` argument overrides the SPI flash connection configuration on {IDF_TARGET_NAME}. This means that the SPI flash can be connected to other pins, or esptool can be used to communicate with a different SPI flash chip to the default.
 
     Supply the ``--spi-connection`` argument after the ``esptool.py`` command, ie ``esptool.py flash_id --spi-connection HSPI``.
+
+    .. note::
+
+        Only NOR flash chips that are capable of at least Dual I/O (DIO) mode for SPI communication are supported. SPI NAND flash chips, as well as other types of memory devices that do not meet this requirement, are not supported.
 
     Default Behavior
     ^^^^^^^^^^^^^^^^
 
-    If the ``--spi-connection`` argument is not provided, the SPI flash is configured to use :ref:`pin numbers set in efuse <espefuse-spi-flash-pins>`. These are the same SPI flash pins that are used during a normal boot.
+    If the ``--spi-connection`` argument is not provided, the SPI flash is configured to use :ref:`pin numbers set in eFuse <espefuse-spi-flash-pins>`. These are the same SPI flash pins that are used during a normal boot.
 
     The only exception to this is if the ``--no-stub`` option is also provided. In this case, efuse values are ignored and ``--spi-connection`` will default to ``--spi-connection SPI`` unless set to a different value.
 
@@ -117,3 +142,21 @@ An example of this is available in the :ref:`merge_bin <merge-bin>` command desc
 .. note:: PowerShell users
 
     Because of `splatting <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_splatting?view=powershell-7.3>`__ in PowerShell (method of passing a collection of parameter values to a command as a unit) there is a need to add quotes around @filename.txt ("@filename.txt") to be correctly resolved.
+
+Filtering serial ports
+----------------------
+.. _filtering_serial_ports:
+
+``--port-filter <FilterType>=<FilterValue>`` allows limiting ports that will be tried. This can be useful when esptool is run on a system
+with many serial ports. There are a few different types that can be combined. A port must match all specified FilterTypes, and must match
+at least one FilterValue for each specified FilterType to be considered. Example filter configurations:
+
+.. list::
+
+    * ``--port-filter vid=0x303A`` matches ports with the Espressif USB VID.
+    * ``--port-filter vid=0x303A --port-filter vid=0x0403`` matches Espressif and FTDI ports by VID.
+    * ``--port-filter vid=0x303A --port-filter pid=0x0002`` matches Espressif ESP32-S2 in USB-OTG mode by VID and PID.
+    * ``--port-filter vid=0x303A --port-filter pid=0x1001`` matches Espressif USB-Serial/JTAG unit used by multiple chips by VID and PID.
+    * ``--port-filter name=ttyUSB`` matches ports where the port name contains the specified text.
+
+See also the `Espressif USB customer-allocated PID repository <https://github.com/espressif/usb-pids>`_
