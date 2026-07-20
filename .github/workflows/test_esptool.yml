@@ -4,12 +4,11 @@ on: [push, pull_request]
 
 jobs:
   test_esptool:
-    # Python 3.7 is not available on ubuntu-24.04 (ubuntu-latest), so run it on ubuntu-22.04
-    runs-on: ${{ matrix.python-version == '3.7' && 'ubuntu-22.04' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
     - name: Checkout ref commit
@@ -64,16 +63,15 @@ jobs:
             git diff --exit-code
 
   lint_esptool:
-      # Python 3.7 is not available on ubuntu-24.04 (ubuntu-latest)
-      runs-on: ubuntu-22.04
+      runs-on: ubuntu-latest
       steps:
         - name: Checkout
           uses: actions/checkout@master
 
-        - name: Set up Python 3.7
+        - name: Set up Python 3.8
           uses: actions/setup-python@master
           with:
-            python-version: 3.7
+            python-version: 3.8
 
         - name: Run pre-commit hooks
           run: |
