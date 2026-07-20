@@ -36,7 +36,9 @@ jobs:
     - name: Install esptool and check if the installed versions can run
       run: |
         python setup.py build
-        pip install --prefer-binary --only-binary cryptography --extra-index-url https://dl.espressif.com/pypi -e .[dev,hsm]
+        # Pin cryptography <49 in CI: the 49.0.0 cp310 wheel is broken on
+        # ubuntu-24.04 (ImportError: undefined symbol EVP_sm4_cfb128).
+        pip install --prefer-binary --extra-index-url https://dl.espressif.com/pypi "cryptography<49" -e .[dev,hsm]
         esptool.py --help
         espefuse.py --help
         espsecure.py --help
@@ -75,5 +77,7 @@ jobs:
 
         - name: Run pre-commit hooks
           run: |
-            pip install --prefer-binary --only-binary cryptography --extra-index-url https://dl.espressif.com/pypi -e .[dev]
+            # Pin cryptography <49 in CI: the 49.0.0 cp310 wheel is broken on
+            # ubuntu-24.04 (ImportError: undefined symbol EVP_sm4_cfb128).
+            pip install --prefer-binary --extra-index-url https://dl.espressif.com/pypi "cryptography<49" -e .[dev]
             pre-commit run --all-files
