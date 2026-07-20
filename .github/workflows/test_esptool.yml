@@ -36,7 +36,7 @@ jobs:
     - name: Install esptool and check if the installed versions can run
       run: |
         python setup.py build
-        pip install --extra-index-url https://dl.espressif.com/pypi -e .[dev,hsm]
+        pip install --prefer-binary --extra-index-url https://dl.espressif.com/pypi -e .[dev,hsm]
         esptool.py --help
         espefuse.py --help
         espsecure.py --help
@@ -75,5 +75,5 @@ jobs:
 
         - name: Run pre-commit hooks
           run: |
-            pip install --extra-index-url https://dl.espressif.com/pypi -e .[dev]
+            pip install --prefer-binary --extra-index-url https://dl.espressif.com/pypi -e .[dev]
             pre-commit run --all-files
