@@ -88,6 +88,7 @@ class ResetStrategy(object):
             status &= ~TIOCM_RTS
         fcntl.ioctl(self.port.fileno(), TIOCMSET, struct.pack("I", status))
 
+
 class RP2040Reset(ResetStrategy):
     """
     Reset sequence for boards using an RP2040 as the USB-to-serial bridge.
@@ -98,12 +99,13 @@ class RP2040Reset(ResetStrategy):
 
     def reset(self):
         self._setDTR(False)  # IO0=HIGH
-        self._setRTS(True)   # EN=LOW, chip in reset
+        self._setRTS(True)  # EN=LOW, chip in reset
         time.sleep(0.1)
-        self._setDTR(True)   # IO0=LOW
+        self._setDTR(True)  # IO0=LOW
         self._setRTS(False)  # EN=HIGH, chip out of reset
         time.sleep(self.reset_delay)
         # NOTE: do NOT release DTR here — this bridge needs IO0 held low.
+
 
 class ClassicReset(ResetStrategy):
     """
