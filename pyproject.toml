@@ -35,6 +35,10 @@
         "bitstring>=3.1.6,!=4.2.0",
         "cryptography>=43.0.0",
         "cryptography<49.0.0; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+        # cryptography 49.0.0's cp310 wheel is broken (undefined symbol
+        # EVP_sm4_cfb128); 3.11+ use a working wheel. Remove once 49.x ships a
+        # fixed cp310 wheel.
+        "cryptography<49.0.0; python_version == '3.10'",
         "pyserial>=3.3",
         "reedsolo>=1.5.3,<1.8",
         "PyYAML>=5.1",
