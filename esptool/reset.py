@@ -125,12 +125,11 @@ class RP2040Reset(ResetStrategy):
     """
     Reset sequence for boards using an RP2040 as the USB-to-serial bridge.
     Mirrors the classic reset but deliberately leaves IO0 (DTR) asserted low
-    at the end — this bridge needs IO0 held low to stay in the download
+    at the end: this bridge needs IO0 held low to stay in the download
     bootloader.
     """
 
     def reset(self):
-        print("RP2040 Reset !")
         time.sleep(0.5)
         self._setDTR(False)  # IO0=HIGH
         self._setRTS(True)  # EN=LOW, chip in reset
@@ -138,7 +137,7 @@ class RP2040Reset(ResetStrategy):
         self._setDTR(True)  # IO0=LOW
         self._setRTS(False)  # EN=HIGH, chip out of reset
         time.sleep(self.reset_delay)
-        # NOTE: do NOT release DTR here — this bridge needs IO0 held low.
+        # NOTE: do NOT release DTR here: this bridge needs IO0 held low.
 
 
 class UnixTightReset(ResetStrategy):
