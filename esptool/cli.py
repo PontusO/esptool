@@ -3,38 +3,6 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-__all__ = [
-    "chip_id",
-    "detect_chip",
-    "dump_mem",
-    "elf2image",
-    "erase_flash",
-    "erase_region",
-    "flash_id",
-    "attach_flash",
-    "get_security_info",
-    "image_info",
-    "load_ram",
-    "merge_bin",
-    "read_flash",
-    "read_flash_status",
-    "read_flash_sfdp",
-    "read_mac",
-    "read_mem",
-    "read_nand_spare",
-    "reset_chip",
-    "run",
-    "run_stub",
-    "verify_flash",
-    "version",
-    "write_flash",
-    "write_flash_status",
-    "write_mem",
-    "write_nand_spare",
-]
-
-__version__ = "5.3.1"
-
 import os
 import shlex
 import sys
@@ -46,6 +14,11 @@ from itertools import chain, cycle, repeat
 import rich_click as click
 import serial
 
+# __all__ and __version__ live in esptool/__init__.py, the package's single
+# source of truth: commitizen bumps __init__.py's __version__ on release,
+# and this module reads it back rather than carrying its own copy that
+# could drift out of sync with esptool.__version__ and the wheel metadata.
+from esptool import __version__
 from esptool.cli_util import (
     AddrFilenameArg,
     AddrFilenamePairType,
@@ -1358,7 +1331,9 @@ def get_default_connected_device(
 
 
 def _main():
-    check_deprecated_py_suffix(__name__)
+    # Not __name__: this module is esptool.cli now, not esptool, but the
+    # deprecated entry point being checked for is still esptool.py.
+    check_deprecated_py_suffix("esptool")
     try:
         main()
     except FatalError as e:
