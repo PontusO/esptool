@@ -17,11 +17,11 @@ import time
 from .config import load_config_file
 from .logger import log
 from .reset import (
+    RP2040Reset,
     DEFAULT_RESET_DELAY,
     ClassicReset,
     CustomReset,
     HardReset,
-    RP2040Reset,
     UnixTightReset,
     USBJTAGSerialReset,
 )

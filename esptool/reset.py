@@ -130,6 +130,8 @@ class RP2040Reset(ResetStrategy):
     """
 
     def reset(self):
+        print("RP2040 Reset !")
+        time.sleep(0.5)
         self._setDTR(False)  # IO0=HIGH
         self._setRTS(True)  # EN=LOW, chip in reset
         time.sleep(0.1)
